@@ -10,7 +10,8 @@
  */
 
 #include <algorithm>
-#include <forward_list>
+#include <queue>
+#include <vector>
 
 #include <disruptorplus/multi_threaded_claim_strategy.hpp>
 #include <disruptorplus/ring_buffer.hpp>
@@ -57,40 +58,32 @@ class TimerQueue {
 
   void TimerThreadMain(std::stop_token stop_token) {
     dp::sequence_t next_sequence = 0;
-    const auto comp = [](const std::shared_ptr<WaitItem>& left,
-                         const std::shared_ptr<WaitItem>& right) {
-      return left->due_ < right->due_;
-    };
 
     set_current_thread_name("rex::thread::TimerQueue");
 
     while (!stop_token.stop_requested()) {
       {
-        // Consume new wait items and add them to sorted wait queue
+        // Consume new wait items and add them to the priority queue
         dp::sequence_t available = claim_strategy_.wait_until_published(
             next_sequence, next_sequence - 1,
-            wait_queue_.empty() ? clock::time_point::max() : wait_queue_.front()->due_);
+            wait_queue_.empty() ? clock::time_point::max() : wait_queue_.top()->due_);
 
         // Check for timeout
         if (available != next_sequence - 1) {
-          std::forward_list<std::shared_ptr<WaitItem>> wait_items;
           do {
-            wait_items.push_front(std::move(buffer_[next_sequence]));
+            wait_queue_.push(std::move(buffer_[next_sequence]));
           } while (next_sequence++ != available);
 
           consumed_.publish(available);
-
-          wait_items.sort(comp);
-          wait_queue_.merge(wait_items, comp);
         }
       }
 
       {
         // Check wait queue, invoke callbacks and reschedule
-        std::forward_list<std::shared_ptr<WaitItem>> wait_items;
-        while (!wait_queue_.empty() && wait_queue_.front()->due_ <= clock::now()) {
-          auto wait_item = std::move(wait_queue_.front());
-          wait_queue_.pop_front();
+        std::vector<std::shared_ptr<WaitItem>> items_to_reschedule;
+        while (!wait_queue_.empty() && wait_queue_.top()->due_ <= clock::now()) {
+          auto wait_item = std::move(const_cast<std::shared_ptr<WaitItem>&>(wait_queue_.top()));
+          wait_queue_.pop();
 
           // Ensure that it isn't disarmed
           auto state = WaitItem::State::kIdle;
@@ -107,7 +100,7 @@ class TimerQueue {
               wait_item->due_ += wait_item->interval_;
               wait_item->state_.store(WaitItem::State::kIdle, std::memory_order_release);
               wait_item->state_.notify_all();
-              wait_items.push_front(std::move(wait_item));
+              items_to_reschedule.push_back(std::move(wait_item));
             } else {
               wait_item->state_.store(WaitItem::State::kDisarmed, std::memory_order_release);
               wait_item->state_.notify_all();
@@ -117,8 +110,9 @@ class TimerQueue {
             assert_true(WaitItem::State::kDisarmed == state);
           }
         }
-        wait_items.sort(comp);
-        wait_queue_.merge(wait_items, comp);
+        for (auto& item : items_to_reschedule) {
+          wait_queue_.push(std::move(item));
+        }
       }
     }
   }
@@ -146,9 +140,19 @@ class TimerQueue {
   dp::multi_threaded_claim_strategy<dp::spin_wait_strategy> claim_strategy_;
   dp::sequence_barrier<dp::spin_wait_strategy> consumed_;
 
-  // This is a _sorted_ (ascending due_) list of active timers managed by a
+  // Comparator for the min-heap: earliest due time has highest priority
+  struct WaitItemComp {
+    bool operator()(const std::shared_ptr<WaitItem>& left,
+                    const std::shared_ptr<WaitItem>& right) const {
+      return left->due_ > right->due_;
+    }
+  };
+
+  // This is a min-heap (ascending due_) of active timers managed by a
   // dedicated thread
-  std::forward_list<std::shared_ptr<WaitItem>> wait_queue_;
+  std::priority_queue<std::shared_ptr<WaitItem>, std::vector<std::shared_ptr<WaitItem>>,
+                      WaitItemComp>
+      wait_queue_;
   std::jthread dispatch_thread_;
 };
 
