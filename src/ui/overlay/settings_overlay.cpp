@@ -484,6 +484,12 @@ void SettingsDialog::OnDraw(ImGuiIO& /*io*/) {
             v = std::min(v, *entry.constraints.max);
           rex::cvar::SetFlagByName(entry.name, std::to_string(v));
         }
+      } else if (entry.type == rex::cvar::FlagType::Trigger) {
+        if (ImGui::Button((entry.name + "##v").c_str())) {
+          if (entry.trigger_fn) {
+            entry.trigger_fn();
+          }
+        }
       } else {
         char buf[256];
         std::strncpy(buf, current_val.c_str(), sizeof(buf) - 1);
