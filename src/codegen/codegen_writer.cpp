@@ -100,6 +100,16 @@ nlohmann::json buildTemplateData(const rex::codegen::CodegenContext& ctx,
       {"non_volatile_as_local", cfg.nonVolatileRegistersAsLocalVariables},
   };
 
+  // Build globals JSON array
+  nlohmann::json globalsJson = nlohmann::json::array();
+  for (const auto& [addr, global] : cfg.globals) {
+    globalsJson.push_back({
+        {"address", fmt::format("{:08X}", addr)},
+        {"name", global.name},
+        {"type", global.type},
+    });
+  }
+
   return {
       {"project", cfg.projectName},
       {"image_base", fmt::format("0x{:X}", ctx.binary().baseAddress())},
@@ -110,6 +120,7 @@ nlohmann::json buildTemplateData(const rex::codegen::CodegenContext& ctx,
       {"config_flags", configFlags},
       {"functions", functionsJson},
       {"imports", importsJson},
+      {"globals", globalsJson},
       {"recomp_files", nlohmann::json::array()},
   };
 }
@@ -223,6 +234,14 @@ bool CodegenWriter::write(bool force) {
   REXCODEGEN_TRACE("Recompile: generating {}_config.cpp (PPCImageConfig)", projectName);
   out = renderWithJson(registry, "codegen/config_cpp", tmplData);
   SaveCurrentOutData(fmt::format("{}_config.cpp", projectName));
+
+  // Generate {project}_globals.h (if any globals are defined)
+  if (!config().globals.empty()) {
+    REXCODEGEN_TRACE("Recompile: generating {}_globals.h ({} globals)", projectName,
+                     config().globals.size());
+    out = renderWithJson(registry, "codegen/globals_h", tmplData);
+    SaveCurrentOutData(fmt::format("{}_globals.h", projectName));
+  }
 
   // Filter out imports and rexcrt functions before recompilation
   std::erase_if(functions, [](const FunctionNode* fn) {

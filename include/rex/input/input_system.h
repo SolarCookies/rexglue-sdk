@@ -15,6 +15,7 @@
 
 #include <rex/input/input.h>
 #include <rex/input/input_driver.h>
+#include <rex/input/raw_input.h>
 #include <rex/system/interfaces/input.h>
 
 namespace rex::ui {
@@ -42,10 +43,17 @@ class InputSystem : public system::IInputSystem {
   X_RESULT SetState(uint32_t user_index, X_INPUT_VIBRATION* vibration);
   X_RESULT GetKeystroke(uint32_t user_index, uint32_t flags, X_INPUT_KEYSTROKE* out_keystroke);
 
+  /// Get the raw input interface for direct keyboard/mouse access.
+  /// Returns nullptr if no MnK driver is registered.
+  /// Use this when you want to bypass controller emulation and access
+  /// raw mouse delta, key states, etc. directly in game hooks.
+  IRawInput* GetRawInput() const override { return raw_input_; }
+
  private:
   rex::ui::Window* window_ = nullptr;
 
   std::vector<std::unique_ptr<InputDriver>> drivers_;
+  IRawInput* raw_input_ = nullptr;  // Cached pointer to MnK driver's IRawInput
 };
 
 /// Create a default InputSystem with SDL + NOP drivers.

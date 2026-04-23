@@ -278,7 +278,8 @@ void MnkInputDriver::UpdateMouseCapture() {
   if (!attached_window_)
     return;
 
-  bool should_capture = IsEnabled() && has_focus_ && is_active();
+  // Capture if either mnk_mode is enabled OR raw capture was requested via IRawInput
+  bool should_capture = (IsEnabled() || raw_capture_requested_) && has_focus_ && is_active();
 
   if (should_capture && !mouse_captured_) {
     mouse_captured_ = true;
@@ -306,7 +307,7 @@ void MnkInputDriver::SetKeyState(uint16_t vk, bool down) {
 }
 
 void MnkInputDriver::OnKeyDown(rex::ui::KeyEvent& e) {
-  if (!IsEnabled() || !has_focus_)
+  if (!has_focus_)
     return;
   std::lock_guard lock(state_mutex_);
   uint16_t vk = static_cast<uint16_t>(e.virtual_key());
@@ -314,15 +315,13 @@ void MnkInputDriver::OnKeyDown(rex::ui::KeyEvent& e) {
 }
 
 void MnkInputDriver::OnKeyUp(rex::ui::KeyEvent& e) {
-  if (!IsEnabled())
-    return;
   std::lock_guard lock(state_mutex_);
   uint16_t vk = static_cast<uint16_t>(e.virtual_key());
   SetKeyState(vk, false);
 }
 
 void MnkInputDriver::OnMouseDown(rex::ui::MouseEvent& e) {
-  if (!IsEnabled() || !has_focus_)
+  if (!has_focus_)
     return;
   std::lock_guard lock(state_mutex_);
   switch (e.button()) {
@@ -341,8 +340,6 @@ void MnkInputDriver::OnMouseDown(rex::ui::MouseEvent& e) {
 }
 
 void MnkInputDriver::OnMouseUp(rex::ui::MouseEvent& e) {
-  if (!IsEnabled())
-    return;
   std::lock_guard lock(state_mutex_);
   switch (e.button()) {
     case rex::ui::MouseEvent::Button::kLeft:
@@ -360,7 +357,8 @@ void MnkInputDriver::OnMouseUp(rex::ui::MouseEvent& e) {
 }
 
 void MnkInputDriver::OnMouseMove(rex::ui::MouseEvent& e) {
-  if (!IsEnabled() || !has_focus_)
+  // Always track mouse movement for raw input, even when mnk_mode is disabled
+  if (!has_focus_)
     return;
   std::lock_guard lock(state_mutex_);
   int32_t x = e.x();
@@ -387,6 +385,116 @@ void MnkInputDriver::OnLostFocus(rex::ui::UISetupEvent&) {
 void MnkInputDriver::OnGotFocus(rex::ui::UISetupEvent&) {
   std::lock_guard lock(state_mutex_);
   has_focus_ = true;
+}
+
+// ============================================================================
+// IRawInput Implementation - Direct access for game hooks
+// ============================================================================
+
+std::pair<int32_t, int32_t> MnkInputDriver::GetMouseDelta() {
+  // Ensure capture state is up-to-date for raw input users
+  // (GetState() won't call this when mnk_mode is disabled)
+  if (raw_capture_requested_) {
+    UpdateMouseCapture();
+  }
+
+  std::pair<int32_t, int32_t> result;
+  {
+    std::lock_guard lock(state_mutex_);
+    result = std::make_pair(mouse_dx_, mouse_dy_);
+    mouse_dx_ = 0;
+    mouse_dy_ = 0;
+  }
+  return result;
+}
+
+std::pair<int32_t, int32_t> MnkInputDriver::PeekMouseDelta() const {
+  std::lock_guard lock(state_mutex_);
+  return std::make_pair(mouse_dx_, mouse_dy_);
+}
+
+void MnkInputDriver::ClearMouseDelta() {
+  std::lock_guard lock(state_mutex_);
+  mouse_dx_ = 0;
+  mouse_dy_ = 0;
+}
+
+std::pair<int32_t, int32_t> MnkInputDriver::GetMousePosition() const {
+  std::lock_guard lock(state_mutex_);
+  return std::make_pair(prev_mouse_x_, prev_mouse_y_);
+}
+
+bool MnkInputDriver::IsKeyDown(rex::ui::VirtualKey vk) const {
+  std::lock_guard lock(state_mutex_);
+  uint16_t idx = static_cast<uint16_t>(vk);
+  return idx < 256 && key_down_[idx];
+}
+
+bool MnkInputDriver::IsMouseButtonDown(int button) const {
+  std::lock_guard lock(state_mutex_);
+  switch (button) {
+    case 0:  // Left
+      return key_down_[static_cast<uint16_t>(VirtualKey::kLButton)];
+    case 1:  // Right
+      return key_down_[static_cast<uint16_t>(VirtualKey::kRButton)];
+    case 2:  // Middle
+      return key_down_[static_cast<uint16_t>(VirtualKey::kMButton)];
+    case 3:  // X1
+      return key_down_[static_cast<uint16_t>(VirtualKey::kXButton1)];
+    case 4:  // X2
+      return key_down_[static_cast<uint16_t>(VirtualKey::kXButton2)];
+    default:
+      return false;
+  }
+}
+
+bool MnkInputDriver::HasFocus() const {
+  std::lock_guard lock(state_mutex_);
+  return has_focus_;
+}
+
+bool MnkInputDriver::IsMouseCaptured() const {
+  std::lock_guard lock(state_mutex_);
+  return mouse_captured_;
+}
+
+std::pair<float, float> MnkInputDriver::GetMovementInput() const {
+  std::lock_guard lock(state_mutex_);
+  float x = 0.0f;
+  float y = 0.0f;
+
+  // W/S for forward/back (Y axis)
+  if (key_down_[static_cast<uint16_t>(VirtualKey::kW)])
+    y += 1.0f;
+  if (key_down_[static_cast<uint16_t>(VirtualKey::kS)])
+    y -= 1.0f;
+
+  // A/D for left/right (X axis)
+  if (key_down_[static_cast<uint16_t>(VirtualKey::kA)])
+    x -= 1.0f;
+  if (key_down_[static_cast<uint16_t>(VirtualKey::kD)])
+    x += 1.0f;
+
+  return std::make_pair(x, y);
+}
+
+std::pair<float, float> MnkInputDriver::GetMovementInputNormalized() const {
+  auto [x, y] = GetMovementInput();
+  float len = std::sqrt(x * x + y * y);
+  if (len > 0.0f) {
+    x /= len;
+    y /= len;
+  }
+  return std::make_pair(x, y);
+}
+
+void MnkInputDriver::SetMouseCapture(bool capture) {
+  {
+    std::lock_guard lock(state_mutex_);
+    raw_capture_requested_ = capture;
+  }
+  // Apply the capture state immediately
+  UpdateMouseCapture();
 }
 
 }  // namespace rex::input::mnk

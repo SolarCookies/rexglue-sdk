@@ -11,6 +11,7 @@
 #pragma once
 
 #include <rex/input/input_driver.h>
+#include <rex/input/raw_input.h>
 #include <rex/ui/window_listener.h>
 
 #include <cstdint>
@@ -21,6 +22,7 @@
 namespace rex::input::mnk {
 
 class MnkInputDriver final : public InputDriver,
+                             public IRawInput,
                              public rex::ui::WindowInputListener,
                              public rex::ui::WindowListener {
  public:
@@ -50,6 +52,19 @@ class MnkInputDriver final : public InputDriver,
   void OnLostFocus(rex::ui::UISetupEvent& e) override;
   void OnGotFocus(rex::ui::UISetupEvent& e) override;
 
+  // IRawInput interface - allows games to bypass controller emulation
+  std::pair<int32_t, int32_t> GetMouseDelta() override;
+  std::pair<int32_t, int32_t> PeekMouseDelta() const override;
+  void ClearMouseDelta() override;
+  std::pair<int32_t, int32_t> GetMousePosition() const override;
+  bool IsKeyDown(rex::ui::VirtualKey vk) const override;
+  bool IsMouseButtonDown(int button) const override;
+  std::pair<float, float> GetMovementInput() const override;
+  std::pair<float, float> GetMovementInputNormalized() const override;
+  bool HasFocus() const override;
+  bool IsMouseCaptured() const override;
+  void SetMouseCapture(bool capture) override;
+
  private:
   uint32_t UserIndex() const;
   bool IsEnabled() const;
@@ -60,7 +75,7 @@ class MnkInputDriver final : public InputDriver,
 
   rex::ui::Window* attached_window_ = nullptr;
 
-  std::mutex state_mutex_;
+  mutable std::mutex state_mutex_;
   bool key_down_[256] = {};
 
   // Mouse delta tracking
@@ -70,6 +85,7 @@ class MnkInputDriver final : public InputDriver,
   int32_t prev_mouse_y_ = 0;
   bool mouse_captured_ = false;
   bool has_focus_ = true;
+  bool raw_capture_requested_ = false;  // For IRawInput::SetMouseCapture
 
   // Keystroke queue
   std::queue<X_INPUT_KEYSTROKE> keystroke_queue_;

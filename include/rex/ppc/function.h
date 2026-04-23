@@ -474,6 +474,21 @@ void _translate_args_to_guest(PPCContext& ctx, uint8_t* base, std::tuple<TArgs..
 }
 
 //=============================================================================
+// Guest Caller Address (for hooks to identify which PPC function called them)
+//=============================================================================
+
+namespace detail {
+inline thread_local uint32_t g_guest_caller_address = 0;
+}  // namespace detail
+
+/// Returns the guest address of the PPC function that called the current hook.
+/// Only valid inside a hook function invoked via PPC_HOOK / HostToGuestFunction.
+/// Returns 0 if no caller information is available.
+inline uint32_t GetGuestCallerAddress() {
+  return detail::g_guest_caller_address;
+}
+
+//=============================================================================
 // Host To PPC Function Wrapper
 //=============================================================================
 // Calls a native C++ function with arguments extracted from PPC context
@@ -484,6 +499,12 @@ __attribute__((noinline)) void HostToGuestFunction(PPCContext& ctx, uint8_t* bas
 
   auto args = function_args(Func);
   _translate_args_to_host<Func>(ctx, base, args);
+
+  // Capture guest LR so hooks can call GetGuestCallerAddress()
+#ifndef PPC_CONFIG_SKIP_LR
+  auto prev_caller = detail::g_guest_caller_address;
+  detail::g_guest_caller_address = static_cast<uint32_t>(ctx.lr);
+#endif
 
   if constexpr (std::is_same_v<ret_t, void>) {
     std::apply(Func, args);
@@ -506,6 +527,10 @@ __attribute__((noinline)) void HostToGuestFunction(PPCContext& ctx, uint8_t* bas
       ctx.r3.u64 = static_cast<uint64_t>(v);
     }
   }
+
+#ifndef PPC_CONFIG_SKIP_LR
+  detail::g_guest_caller_address = prev_caller;
+#endif
 }
 
 //=============================================================================
