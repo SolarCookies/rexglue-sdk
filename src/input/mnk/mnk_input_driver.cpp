@@ -30,6 +30,17 @@ REXCVAR_DEFINE_BOOL(mnk_mode, false, "Input", "Enable keyboard/mouse controller 
 REXCVAR_DEFINE_INT32(mnk_user_index, 0, "Input", "Controller slot (0-3) for MnK").range(0, 3);
 REXCVAR_DEFINE_DOUBLE(mnk_sensitivity, 1.0, "Input", "Mouse sensitivity for right stick")
     .range(0.01, 10.0);
+REXCVAR_DEFINE_INT32(mnk_keystroke_repeat_delay_ms, 250, "Input",
+                     "Delay before keystroke repeat starts (ms)")
+    .range(50, 2000);
+REXCVAR_DEFINE_INT32(mnk_keystroke_repeat_rate_ms, 33, "Input",
+                     "Keystroke repeat interval after the initial delay (ms)")
+    .range(10, 500);
+REXCVAR_DEFINE_BOOL(mnk_emit_rstick_keystrokes, false, "Input",
+                    "Emit XInput keystrokes for the right stick. Disabled by default since "
+                    "the stick is mouse-driven and continuous; threshold-based emission can "
+                    "noise the queue during normal aiming. Enable for titles whose menus are "
+                    "navigated by right-stick keystrokes.");
 
 REXCVAR_DEFINE_STRING(keybind_a, "Space", "Input/Keybinds/Controller", "A button");
 REXCVAR_DEFINE_STRING(keybind_b, "Shift", "Input/Keybinds/Controller", "B button");
@@ -211,6 +222,15 @@ X_RESULT MnkInputDriver::GetState(uint32_t user_index, X_INPUT_STATE* out_state)
 
   packet_number_++;
 
+  // Tick keystroke repeats so titles polling state see XINPUT_KEYSTROKE_REPEAT
+  // events for held buttons. The actual KEYDOWN/KEYUP edges are emitted in the
+  // event handlers (OnKeyDown/Up/MouseDown/Up) so fast taps that happen between
+  // GetState calls are not dropped.
+  TickRepeats();
+  // Right-stick keystrokes are opt-in (mnk_emit_rstick_keystrokes); see comment
+  // on the cvar definition for the tradeoff.
+  EnqueueRStickIfChanged(clamp16(rx), clamp16(ry));
+
   if (out_state) {
     out_state->packet_number = packet_number_;
     out_state->gamepad.buttons = buttons;
@@ -237,6 +257,9 @@ X_RESULT MnkInputDriver::GetKeystroke(uint32_t user_index, uint32_t flags,
     return X_ERROR_DEVICE_NOT_CONNECTED;
   }
   std::lock_guard lock(state_mutex_);
+  // Also tick from here so titles that only poll keystrokes (without ever calling
+  // XamInputGetState) still see XINPUT_KEYSTROKE_REPEAT.
+  TickRepeats();
   if (keystroke_queue_.empty()) {
     return X_ERROR_EMPTY;
   }
@@ -247,14 +270,172 @@ X_RESULT MnkInputDriver::GetKeystroke(uint32_t user_index, uint32_t flags,
   return X_ERROR_SUCCESS;
 }
 
-void MnkInputDriver::EnqueueKeystroke(uint16_t vk_pad, bool down) {
+void MnkInputDriver::EnqueueKeystroke(uint16_t vk_pad, uint16_t flags) {
   X_INPUT_KEYSTROKE ks = {};
   ks.virtual_key = vk_pad;
   ks.unicode = 0;
-  ks.flags = down ? X_INPUT_KEYSTROKE_KEYDOWN : X_INPUT_KEYSTROKE_KEYUP;
+  ks.flags = flags;
   ks.user_index = static_cast<uint8_t>(UserIndex());
   ks.hid_code = 0;
   keystroke_queue_.push(ks);
+}
+
+// Apply a transition to a tracked pad slot. Down on a not-held slot emits
+// KEYDOWN and starts repeat timing; up on a held slot emits KEYUP. No-op
+// otherwise so duplicate edges from the OS auto-repeat path don't double-emit.
+void MnkInputDriver::HandleEdge(PadIdx idx, uint16_t vk_pad, bool down) {
+  auto& s = pad_states_[idx];
+  if (down && !s.held) {
+    auto now = std::chrono::steady_clock::now();
+    s.held = true;
+    s.vk_pad = vk_pad;
+    s.pressed_at = now;
+    s.last_event_at = now;
+    EnqueueKeystroke(vk_pad, X_INPUT_KEYSTROKE_KEYDOWN);
+  } else if (!down && s.held) {
+    s.held = false;
+    EnqueueKeystroke(s.vk_pad, X_INPUT_KEYSTROKE_KEYUP);
+  }
+}
+
+// Apply a stick-direction change. Releases the prior direction (if any) and
+// presses the new one. kNone clears without emitting a press.
+void MnkInputDriver::HandleStickDirChange(PadIdx idx, uint16_t new_dir) {
+  auto& s = pad_states_[idx];
+  if (new_dir == s.vk_pad)
+    return;
+  if (s.held) {
+    EnqueueKeystroke(s.vk_pad, X_INPUT_KEYSTROKE_KEYUP);
+    s.held = false;
+  }
+  s.vk_pad = new_dir;
+  if (new_dir != static_cast<uint16_t>(VirtualKey::kNone)) {
+    auto now = std::chrono::steady_clock::now();
+    s.held = true;
+    s.pressed_at = now;
+    s.last_event_at = now;
+    EnqueueKeystroke(new_dir, X_INPUT_KEYSTROKE_KEYDOWN);
+  }
+}
+
+// Walk the keybind cvars for buttons and triggers; for any whose bound key
+// matches key_vk, apply a HandleEdge. Stick directions are handled separately
+// in RecomputeLstickDir because a single direction can depend on multiple
+// keys held at once.
+void MnkInputDriver::EmitButtonChange(VirtualKey key_vk, bool down) {
+  auto try_match = [this, key_vk, down](const std::string& cvar_val, PadIdx idx,
+                                        VirtualKey vk_pad) {
+    if (rex::ui::ParseVirtualKey(cvar_val) == key_vk) {
+      HandleEdge(idx, static_cast<uint16_t>(vk_pad), down);
+    }
+  };
+  try_match(REXCVAR_GET(keybind_a), kPadIdxA, VirtualKey::kXInputPadA);
+  try_match(REXCVAR_GET(keybind_b), kPadIdxB, VirtualKey::kXInputPadB);
+  try_match(REXCVAR_GET(keybind_x), kPadIdxX, VirtualKey::kXInputPadX);
+  try_match(REXCVAR_GET(keybind_y), kPadIdxY, VirtualKey::kXInputPadY);
+  try_match(REXCVAR_GET(keybind_left_shoulder), kPadIdxLB, VirtualKey::kXInputPadLShoulder);
+  try_match(REXCVAR_GET(keybind_right_shoulder), kPadIdxRB, VirtualKey::kXInputPadRShoulder);
+  try_match(REXCVAR_GET(keybind_start), kPadIdxStart, VirtualKey::kXInputPadStart);
+  try_match(REXCVAR_GET(keybind_back), kPadIdxBack, VirtualKey::kXInputPadBack);
+  try_match(REXCVAR_GET(keybind_lstick_press), kPadIdxL3, VirtualKey::kXInputPadLThumbPress);
+  try_match(REXCVAR_GET(keybind_rstick_press), kPadIdxR3, VirtualKey::kXInputPadRThumbPress);
+  try_match(REXCVAR_GET(keybind_dpad_up), kPadIdxDU, VirtualKey::kXInputPadDpadUp);
+  try_match(REXCVAR_GET(keybind_dpad_down), kPadIdxDD, VirtualKey::kXInputPadDpadDown);
+  try_match(REXCVAR_GET(keybind_dpad_left), kPadIdxDL, VirtualKey::kXInputPadDpadLeft);
+  try_match(REXCVAR_GET(keybind_dpad_right), kPadIdxDR, VirtualKey::kXInputPadDpadRight);
+  try_match(REXCVAR_GET(keybind_left_trigger), kPadIdxLT, VirtualKey::kXInputPadLTrigger);
+  try_match(REXCVAR_GET(keybind_right_trigger), kPadIdxRT, VirtualKey::kXInputPadRTrigger);
+  // Guide is intentionally omitted: standard XInput keystroke spec has no
+  // VK_PAD_GUIDE; the bit lives only in XInputGetStateEx's state.
+}
+
+// Recompute composite left-stick direction from currently-held WASD-style
+// keys and emit transition keystrokes if the direction changed. Cheap to
+// always call from key event handlers - early-outs if direction matches.
+void MnkInputDriver::RecomputeLstickDir() {
+  bool up = IsBindPressed(key_down_, REXCVAR_GET(keybind_lstick_up));
+  bool dn = IsBindPressed(key_down_, REXCVAR_GET(keybind_lstick_down));
+  bool lf = IsBindPressed(key_down_, REXCVAR_GET(keybind_lstick_left));
+  bool rt = IsBindPressed(key_down_, REXCVAR_GET(keybind_lstick_right));
+
+  uint16_t dir = static_cast<uint16_t>(VirtualKey::kNone);
+  if (up && rt)
+    dir = static_cast<uint16_t>(VirtualKey::kXInputPadLThumbUpRight);
+  else if (up && lf)
+    dir = static_cast<uint16_t>(VirtualKey::kXInputPadLThumbUpLeft);
+  else if (dn && rt)
+    dir = static_cast<uint16_t>(VirtualKey::kXInputPadLThumbDownRight);
+  else if (dn && lf)
+    dir = static_cast<uint16_t>(VirtualKey::kXInputPadLThumbDownLeft);
+  else if (up)
+    dir = static_cast<uint16_t>(VirtualKey::kXInputPadLThumbUp);
+  else if (dn)
+    dir = static_cast<uint16_t>(VirtualKey::kXInputPadLThumbDown);
+  else if (rt)
+    dir = static_cast<uint16_t>(VirtualKey::kXInputPadLThumbRight);
+  else if (lf)
+    dir = static_cast<uint16_t>(VirtualKey::kXInputPadLThumbLeft);
+
+  HandleStickDirChange(kPadIdxLStick, dir);
+}
+
+// Right stick is mouse-driven and continuous. By default we skip emission to
+// avoid noising the queue during normal aiming. Opt-in via mnk_emit_rstick_keystrokes
+// for titles whose menus respond to right-stick keystrokes; threshold-based
+// classification turns the analog deflection into 9 discrete states with the
+// same transition semantics as the left stick.
+void MnkInputDriver::EnqueueRStickIfChanged(int16_t rx, int16_t ry) {
+  if (!REXCVAR_GET(mnk_emit_rstick_keystrokes)) {
+    return;
+  }
+  // ~25% of full deflection so jitter under aiming doesn't toggle directions.
+  constexpr int16_t kThreshold = 8192;
+  bool up = ry > kThreshold;
+  bool dn = ry < -kThreshold;
+  bool lf = rx < -kThreshold;
+  bool rt = rx > kThreshold;
+
+  uint16_t dir = static_cast<uint16_t>(VirtualKey::kNone);
+  if (up && rt)
+    dir = static_cast<uint16_t>(VirtualKey::kXInputPadRThumbUpRight);
+  else if (up && lf)
+    dir = static_cast<uint16_t>(VirtualKey::kXInputPadRThumbUpLeft);
+  else if (dn && rt)
+    dir = static_cast<uint16_t>(VirtualKey::kXInputPadRThumbDownRight);
+  else if (dn && lf)
+    dir = static_cast<uint16_t>(VirtualKey::kXInputPadRThumbDownLeft);
+  else if (up)
+    dir = static_cast<uint16_t>(VirtualKey::kXInputPadRThumbUp);
+  else if (dn)
+    dir = static_cast<uint16_t>(VirtualKey::kXInputPadRThumbDown);
+  else if (rt)
+    dir = static_cast<uint16_t>(VirtualKey::kXInputPadRThumbRight);
+  else if (lf)
+    dir = static_cast<uint16_t>(VirtualKey::kXInputPadRThumbLeft);
+
+  HandleStickDirChange(kPadIdxRStick, dir);
+}
+
+// Walk currently-held pad slots and emit XINPUT_KEYSTROKE_REPEAT events at
+// the configured rate after the initial delay. Called from both GetState and
+// GetKeystroke so titles that poll either path see repeat events.
+void MnkInputDriver::TickRepeats() {
+  if (!IsEnabled() || !has_focus_) {
+    return;
+  }
+  auto now = std::chrono::steady_clock::now();
+  auto delay = std::chrono::milliseconds(REXCVAR_GET(mnk_keystroke_repeat_delay_ms));
+  auto rate = std::chrono::milliseconds(REXCVAR_GET(mnk_keystroke_repeat_rate_ms));
+  for (auto& s : pad_states_) {
+    if (!s.held)
+      continue;
+    if (now - s.pressed_at < delay)
+      continue;
+    if (now - s.last_event_at < rate)
+      continue;
+    EnqueueKeystroke(s.vk_pad, X_INPUT_KEYSTROKE_REPEAT);
+    s.last_event_at = now;
+  }
 }
 
 void MnkInputDriver::CenterCursor() {
@@ -278,8 +459,7 @@ void MnkInputDriver::UpdateMouseCapture() {
   if (!attached_window_)
     return;
 
-  // Capture if either mnk_mode is enabled OR raw capture was requested via IRawInput
-  bool should_capture = (IsEnabled() || raw_capture_requested_) && has_focus_ && is_active();
+  bool should_capture = IsEnabled() && has_focus_ && is_active();
 
   if (should_capture && !mouse_captured_) {
     mouse_captured_ = true;
@@ -307,58 +487,92 @@ void MnkInputDriver::SetKeyState(uint16_t vk, bool down) {
 }
 
 void MnkInputDriver::OnKeyDown(rex::ui::KeyEvent& e) {
-  if (!has_focus_)
+  if (!IsEnabled() || !has_focus_)
     return;
   std::lock_guard lock(state_mutex_);
-  uint16_t vk = static_cast<uint16_t>(e.virtual_key());
-  SetKeyState(vk, true);
+  VirtualKey vk = e.virtual_key();
+  uint16_t idx = static_cast<uint16_t>(vk);
+  // OS auto-repeat fires OnKeyDown repeatedly while the key is held; only the
+  // first transition (was-up -> now-down) should emit a KEYDOWN keystroke.
+  // XINPUT_KEYSTROKE_REPEAT is generated by TickRepeats() on its own schedule.
+  bool was_down = (idx < 256) && key_down_[idx];
+  SetKeyState(idx, true);
+  if (!was_down) {
+    EmitButtonChange(vk, true);
+    RecomputeLstickDir();
+  }
 }
 
 void MnkInputDriver::OnKeyUp(rex::ui::KeyEvent& e) {
+  if (!IsEnabled())
+    return;
   std::lock_guard lock(state_mutex_);
-  uint16_t vk = static_cast<uint16_t>(e.virtual_key());
-  SetKeyState(vk, false);
+  VirtualKey vk = e.virtual_key();
+  uint16_t idx = static_cast<uint16_t>(vk);
+  bool was_down = (idx < 256) && key_down_[idx];
+  SetKeyState(idx, false);
+  if (was_down) {
+    EmitButtonChange(vk, false);
+    RecomputeLstickDir();
+  }
 }
 
 void MnkInputDriver::OnMouseDown(rex::ui::MouseEvent& e) {
-  if (!has_focus_)
+  if (!IsEnabled() || !has_focus_)
     return;
   std::lock_guard lock(state_mutex_);
+  VirtualKey vk = VirtualKey::kNone;
   switch (e.button()) {
     case rex::ui::MouseEvent::Button::kLeft:
-      SetKeyState(static_cast<uint16_t>(VirtualKey::kLButton), true);
+      vk = VirtualKey::kLButton;
       break;
     case rex::ui::MouseEvent::Button::kRight:
-      SetKeyState(static_cast<uint16_t>(VirtualKey::kRButton), true);
+      vk = VirtualKey::kRButton;
       break;
     case rex::ui::MouseEvent::Button::kMiddle:
-      SetKeyState(static_cast<uint16_t>(VirtualKey::kMButton), true);
+      vk = VirtualKey::kMButton;
       break;
     default:
-      break;
+      return;
+  }
+  uint16_t idx = static_cast<uint16_t>(vk);
+  bool was_down = (idx < 256) && key_down_[idx];
+  SetKeyState(idx, true);
+  if (!was_down) {
+    EmitButtonChange(vk, true);
+    RecomputeLstickDir();
   }
 }
 
 void MnkInputDriver::OnMouseUp(rex::ui::MouseEvent& e) {
+  if (!IsEnabled())
+    return;
   std::lock_guard lock(state_mutex_);
+  VirtualKey vk = VirtualKey::kNone;
   switch (e.button()) {
     case rex::ui::MouseEvent::Button::kLeft:
-      SetKeyState(static_cast<uint16_t>(VirtualKey::kLButton), false);
+      vk = VirtualKey::kLButton;
       break;
     case rex::ui::MouseEvent::Button::kRight:
-      SetKeyState(static_cast<uint16_t>(VirtualKey::kRButton), false);
+      vk = VirtualKey::kRButton;
       break;
     case rex::ui::MouseEvent::Button::kMiddle:
-      SetKeyState(static_cast<uint16_t>(VirtualKey::kMButton), false);
+      vk = VirtualKey::kMButton;
       break;
     default:
-      break;
+      return;
+  }
+  uint16_t idx = static_cast<uint16_t>(vk);
+  bool was_down = (idx < 256) && key_down_[idx];
+  SetKeyState(idx, false);
+  if (was_down) {
+    EmitButtonChange(vk, false);
+    RecomputeLstickDir();
   }
 }
 
 void MnkInputDriver::OnMouseMove(rex::ui::MouseEvent& e) {
-  // Always track mouse movement for raw input, even when mnk_mode is disabled
-  if (!has_focus_)
+  if (!IsEnabled() || !has_focus_)
     return;
   std::lock_guard lock(state_mutex_);
   int32_t x = e.x();
@@ -375,6 +589,16 @@ void MnkInputDriver::OnLostFocus(rex::ui::UISetupEvent&) {
   std::memset(key_down_, 0, sizeof(key_down_));
   mouse_dx_ = 0;
   mouse_dy_ = 0;
+  // Drop any keystrokes queued before focus loss; otherwise they would be
+  // delivered when the title regains focus, out of order with current input.
+  std::queue<X_INPUT_KEYSTROKE> empty;
+  std::swap(keystroke_queue_, empty);
+  // Clear per-pad hold state so resumed focus does not generate stale REPEAT
+  // events for keys that were held when focus was lost.
+  for (auto& s : pad_states_) {
+    s.held = false;
+    s.vk_pad = static_cast<uint16_t>(VirtualKey::kNone);
+  }
   if (mouse_captured_ && attached_window_) {
     mouse_captured_ = false;
     attached_window_->SetCursorVisibility(rex::ui::Window::CursorVisibility::kVisible);
@@ -385,116 +609,6 @@ void MnkInputDriver::OnLostFocus(rex::ui::UISetupEvent&) {
 void MnkInputDriver::OnGotFocus(rex::ui::UISetupEvent&) {
   std::lock_guard lock(state_mutex_);
   has_focus_ = true;
-}
-
-// ============================================================================
-// IRawInput Implementation - Direct access for game hooks
-// ============================================================================
-
-std::pair<int32_t, int32_t> MnkInputDriver::GetMouseDelta() {
-  // Ensure capture state is up-to-date for raw input users
-  // (GetState() won't call this when mnk_mode is disabled)
-  if (raw_capture_requested_) {
-    UpdateMouseCapture();
-  }
-
-  std::pair<int32_t, int32_t> result;
-  {
-    std::lock_guard lock(state_mutex_);
-    result = std::make_pair(mouse_dx_, mouse_dy_);
-    mouse_dx_ = 0;
-    mouse_dy_ = 0;
-  }
-  return result;
-}
-
-std::pair<int32_t, int32_t> MnkInputDriver::PeekMouseDelta() const {
-  std::lock_guard lock(state_mutex_);
-  return std::make_pair(mouse_dx_, mouse_dy_);
-}
-
-void MnkInputDriver::ClearMouseDelta() {
-  std::lock_guard lock(state_mutex_);
-  mouse_dx_ = 0;
-  mouse_dy_ = 0;
-}
-
-std::pair<int32_t, int32_t> MnkInputDriver::GetMousePosition() const {
-  std::lock_guard lock(state_mutex_);
-  return std::make_pair(prev_mouse_x_, prev_mouse_y_);
-}
-
-bool MnkInputDriver::IsKeyDown(rex::ui::VirtualKey vk) const {
-  std::lock_guard lock(state_mutex_);
-  uint16_t idx = static_cast<uint16_t>(vk);
-  return idx < 256 && key_down_[idx];
-}
-
-bool MnkInputDriver::IsMouseButtonDown(int button) const {
-  std::lock_guard lock(state_mutex_);
-  switch (button) {
-    case 0:  // Left
-      return key_down_[static_cast<uint16_t>(VirtualKey::kLButton)];
-    case 1:  // Right
-      return key_down_[static_cast<uint16_t>(VirtualKey::kRButton)];
-    case 2:  // Middle
-      return key_down_[static_cast<uint16_t>(VirtualKey::kMButton)];
-    case 3:  // X1
-      return key_down_[static_cast<uint16_t>(VirtualKey::kXButton1)];
-    case 4:  // X2
-      return key_down_[static_cast<uint16_t>(VirtualKey::kXButton2)];
-    default:
-      return false;
-  }
-}
-
-bool MnkInputDriver::HasFocus() const {
-  std::lock_guard lock(state_mutex_);
-  return has_focus_;
-}
-
-bool MnkInputDriver::IsMouseCaptured() const {
-  std::lock_guard lock(state_mutex_);
-  return mouse_captured_;
-}
-
-std::pair<float, float> MnkInputDriver::GetMovementInput() const {
-  std::lock_guard lock(state_mutex_);
-  float x = 0.0f;
-  float y = 0.0f;
-
-  // W/S for forward/back (Y axis)
-  if (key_down_[static_cast<uint16_t>(VirtualKey::kW)])
-    y += 1.0f;
-  if (key_down_[static_cast<uint16_t>(VirtualKey::kS)])
-    y -= 1.0f;
-
-  // A/D for left/right (X axis)
-  if (key_down_[static_cast<uint16_t>(VirtualKey::kA)])
-    x -= 1.0f;
-  if (key_down_[static_cast<uint16_t>(VirtualKey::kD)])
-    x += 1.0f;
-
-  return std::make_pair(x, y);
-}
-
-std::pair<float, float> MnkInputDriver::GetMovementInputNormalized() const {
-  auto [x, y] = GetMovementInput();
-  float len = std::sqrt(x * x + y * y);
-  if (len > 0.0f) {
-    x /= len;
-    y /= len;
-  }
-  return std::make_pair(x, y);
-}
-
-void MnkInputDriver::SetMouseCapture(bool capture) {
-  {
-    std::lock_guard lock(state_mutex_);
-    raw_capture_requested_ = capture;
-  }
-  // Apply the capture state immediately
-  UpdateMouseCapture();
 }
 
 }  // namespace rex::input::mnk

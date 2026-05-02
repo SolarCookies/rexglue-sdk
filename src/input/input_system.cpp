@@ -41,10 +41,6 @@ void InputSystem::Shutdown() {
 }
 
 void InputSystem::AddDriver(std::unique_ptr<InputDriver> driver) {
-  // Check if this driver implements IRawInput (e.g., MnkInputDriver)
-  if (auto* raw = dynamic_cast<IRawInput*>(driver.get())) {
-    raw_input_ = raw;
-  }
   drivers_.push_back(std::move(driver));
 }
 
