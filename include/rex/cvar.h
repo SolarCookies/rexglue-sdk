@@ -311,7 +311,7 @@ inline bool ParseDouble(std::string_view s, double& out) {
                                     return true;                                             \
                                   },                                                         \
                                   []() { return std::to_string(FLAGS_##name); },             \
-                                  []() { return; },                                          \ 
+                                  []() { return; },                                          \
                                   ::rex::cvar::Lifecycle::kHotReload,                        \
                                   {},                                                        \
                                   std::to_string(default_val),                               \
