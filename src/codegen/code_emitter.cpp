@@ -18,9 +18,9 @@ void CodeEmitter::ensureCsrState(CsrState required) {
 
   // Emit CSR mode change if needed
   if (required == CsrState::Vmx) {
-    line("REX_SET_FLUSH_MODE(true);");
+    line("PPC_SET_FLUSH_MODE(true);");
   } else if (required == CsrState::Fpu) {
-    line("REX_SET_FLUSH_MODE(false);");
+    line("PPC_SET_FLUSH_MODE(false);");
   }
 
   csrState_ = required;

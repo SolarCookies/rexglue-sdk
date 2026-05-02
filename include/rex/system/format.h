@@ -22,7 +22,7 @@
 
 #include <rex/assert.h>
 #include <rex/ppc/context.h>
-#include <rex/ppc/function.h>
+#include <rex/ppc/memory.h>
 #include <rex/types.h>
 
 namespace rex::system::format {
@@ -163,7 +163,8 @@ class StackArgList {
     } else {
       // Stack arguments: 8-byte big-endian values at r1 + 0x54 + ((index - 8) * 8)
       uint32_t stack_addr = ctx_.r1.u32 + 0x54 + ((index_ - 8) * 8);
-      value = static_cast<u64>(*rex::memory::GuestPtr<rex::be<u64>*>(base_, stack_addr));
+      value = __builtin_bswap64(
+          *reinterpret_cast<uint64_t*>(base_ + stack_addr + PPC_PHYS_HOST_OFFSET(stack_addr)));
     }
     ++index_;
     return value;
@@ -188,7 +189,8 @@ class ArrayArgList {
 
   uint64_t get64() {
     uint32_t addr = arg_ptr_ + (8 * index_);
-    uint64_t value = static_cast<u64>(*rex::memory::GuestPtr<rex::be<u64>*>(base_, addr));
+    uint64_t value =
+        __builtin_bswap64(*reinterpret_cast<uint64_t*>(base_ + addr + PPC_PHYS_HOST_OFFSET(addr)));
     ++index_;
     return value;
   }
@@ -678,9 +680,9 @@ int32_t format_core(uint8_t* base, Data& data, Args& args, const bool wide) {
           case 'n': {
             auto pointer = (uint32_t)args.get32();
             if (flags & FF_IsShort) {
-              *rex::memory::GuestPtr<rex::be<u16>*>(base, pointer) = (u16)count;
+              PPC_STORE_U16(pointer, (uint16_t)count);
             } else {
-              *rex::memory::GuestPtr<rex::be<u32>*>(base, pointer) = (u32)count;
+              PPC_STORE_U32(pointer, (uint32_t)count);
             }
             continue;
           }
@@ -709,7 +711,7 @@ int32_t format_core(uint8_t* base, Data& data, Args& args, const bool wide) {
               text.length = std::min((int32_t)strlen(nullstr), cap);
               text.is_wide = false;
             } else {
-              void* str = rex::memory::GuestPtr<void*>(base, pointer);
+              void* str = reinterpret_cast<void*>(base + pointer + PPC_PHYS_HOST_OFFSET(pointer));
               bool is_wide;
               if (flags & (FF_IsLong | FF_IsWide)) {
                 is_wide = true;

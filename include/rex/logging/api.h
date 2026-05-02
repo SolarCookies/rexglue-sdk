@@ -13,7 +13,6 @@
 
 #include <rex/logging/types.h>
 
-#include <filesystem>
 #include <span>
 
 #include <rex/cvar.h>
@@ -22,10 +21,7 @@
 REXCVAR_DECLARE(std::string, log_level);
 REXCVAR_DECLARE(std::string, log_file);
 REXCVAR_DECLARE(bool, log_verbose);
-REXCVAR_DECLARE(bool, log_noisy);
-REXCVAR_DECLARE(int32_t, log_flush_interval);
-REXCVAR_DECLARE(int32_t, log_max_file_size_mb);
-REXCVAR_DECLARE(int32_t, log_max_files);
+REXCVAR_DECLARE(bool, enable_console);
 
 namespace rex {
 
@@ -53,18 +49,11 @@ void InitLogging(const LogConfig& config);
 /**
  * Initialize logging with simple parameters (convenience overload).
  *
- * @param log_file  Path to log file, or nullptr for no file logging.
+ * @param log_file  Path to log file, or nullptr for console-only.
  * @param level     Default log level for all categories.
  */
 void InitLogging(const char* log_file = nullptr,
                  spdlog::level::level_enum level = spdlog::level::info);
-
-/**
- * Early-phase logging initialization (before config is loaded).
- * Creates a platform debug sink (OutputDebugString on Windows, stdout elsewhere)
- * so log lines emitted before InitLogging() is called are captured.
- */
-void InitLoggingEarly();
 
 /**
  * Flush all loggers and shut down the logging system.
@@ -85,9 +74,6 @@ void ShutdownLogging();
  * @return      Handle for the new category.
  */
 LogCategoryId RegisterLogCategory(const char* name);
-
-LogCategoryId RegisterLogSubcategory(const char* name, LogCategoryId parent);
-void SetRootLevel(LogCategoryId root, spdlog::level::level_enum level);
 
 /**
  * Look up a category by name.
@@ -185,7 +171,7 @@ void RemoveSink(spdlog::sink_ptr sink);
 void RemoveSink(LogCategoryId category, spdlog::sink_ptr sink);
 
 /**
- * Update the format pattern on the stdout console sink.
+ * Update the format pattern on the console sink.
  *
  * @param pattern  spdlog pattern string.
  */
@@ -232,7 +218,14 @@ spdlog::level::level_enum ParseLogLevelOr(const std::string& level_str,
 LogConfig BuildLogConfig(const char* log_file, const std::string& cli_level,
                          const std::map<std::string, std::string>& category_levels);
 
-std::map<std::string, std::string> ParseCategoryLevelsFromConfig(
-    const std::filesystem::path& config_path);
+/**
+ * Get the current guest thread ID for logging.
+ *
+ * This is a weak symbol that returns 0 by default. Override in the
+ * runtime library to return the actual guest thread ID.
+ *
+ * @return  Guest thread ID, or 0 if not in guest context.
+ */
+uint32_t GetLogGuestThreadId();
 
 }  // namespace rex

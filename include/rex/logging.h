@@ -17,7 +17,7 @@
 // Function declarations, CVAR declarations
 #include <rex/logging/api.h>
 
-// Logging macros (parameterized, per-subsystem aliases, category definition)
+// Logging macros (parameterized, legacy aliases, FN, TID)
 #include <rex/logging/macros.h>
 
 // Fatal error and assertion macros

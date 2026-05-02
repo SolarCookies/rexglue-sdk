@@ -7,7 +7,7 @@
 
 // Forward declarations
 ## for func in functions
-DECLARE_REX_FUNC({{ func.name }});
+PPC_EXTERN_FUNC({{ func.name }});
 ## endfor
 
 // Function implementations

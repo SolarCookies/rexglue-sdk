@@ -61,7 +61,6 @@ void PrintUsage() {
 int main(int argc, char** argv) {
   auto remaining = rex::cvar::Init(argc, argv);
   rex::cvar::ApplyEnvironment();
-  rex::InitLoggingEarly();
 
   std::string command;
 
@@ -88,7 +87,6 @@ int main(int argc, char** argv) {
   std::map<std::string, std::string> category_levels;
   auto log_config = rex::BuildLogConfig(log_file_path.empty() ? nullptr : log_file_path.c_str(),
                                         level_str, category_levels);
-  log_config.log_to_console = true;  // CLI always logs to console
   rex::InitLogging(log_config);
 
   // Register callback for runtime level changes

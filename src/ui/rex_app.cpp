@@ -43,7 +43,6 @@
 
 REXCVAR_DEFINE_STRING(user_data_root, "", "Runtime", "Override user data path");
 REXCVAR_DEFINE_STRING(update_data_root, "", "Runtime", "Override update data path");
-REXCVAR_DEFINE_STRING(cache_path, "", "Runtime", "Override shader cache path");
 
 namespace rex {
 
@@ -84,50 +83,34 @@ bool ReXApp::OnInitialize() {
     update_dir = update_data_cvar;
   }
 
-  // Cache: cvar override, or user_dir/cache
-  std::filesystem::path cache_dir;
-  std::string cache_path_cvar = REXCVAR_GET(cache_path);
-  if (!cache_path_cvar.empty()) {
-    cache_dir = cache_path_cvar;
-  } else {
-    cache_dir = user_dir / "cache";
-  }
-
   // Allow subclass to override path defaults
-  PathConfig path_config{game_dir, user_dir, update_dir, cache_dir};
+  PathConfig path_config{game_dir, user_dir, update_dir};
   OnConfigurePaths(path_config);
   game_data_root_ = std::move(path_config.game_data_root);
   user_data_root_ = std::move(path_config.user_data_root);
   update_data_root_ = std::move(path_config.update_data_root);
-  cache_root_ = std::move(path_config.cache_root);
 
-  // Load config FIRST so log cvars have final values
-  auto config_path = exe_dir / (std::string(GetName()) + ".toml");
-  if (std::filesystem::exists(config_path))
-    rex::cvar::LoadConfig(config_path);
-
-  // Late-phase logging
+  // Logging setup from CVARs
   std::string log_file_cvar = REXCVAR_GET(log_file);
   std::string log_level_str = REXCVAR_GET(log_level);
-  if (REXCVAR_GET(log_verbose) && log_level_str == "info")
+  if (REXCVAR_GET(log_verbose) && log_level_str == "info") {
     log_level_str = "trace";
-
-  auto category_levels = rex::ParseCategoryLevelsFromConfig(config_path);
-  auto log_config = rex::BuildLogConfig(log_file_cvar.empty() ? nullptr : log_file_cvar.c_str(),
-                                        log_level_str, category_levels);
-  if (log_file_cvar.empty()) {
-    log_config.app_name = std::string(GetName());
-    log_config.log_dir = (exe_dir / "logs").string();
   }
-
+  auto log_config = rex::BuildLogConfig(log_file_cvar.empty() ? nullptr : log_file_cvar.c_str(),
+                                        log_level_str, {});
   rex::InitLogging(log_config);
   rex::RegisterLogLevelCallback();
 
+  // Attach log capture sink to all loggers for the console overlay
   log_sink_ = std::make_shared<rex::LogCaptureSink>();
   rex::AddSink(log_sink_);
 
-  if (std::filesystem::exists(config_path))
+  // Load saved config (CVARs) before anything reads them
+  auto config_path = exe_dir / (std::string(GetName()) + ".toml");
+  if (std::filesystem::exists(config_path)) {
+    rex::cvar::LoadConfig(config_path);
     REXLOG_INFO("Loaded config: {}", config_path.filename().string());
+  }
 
   REXLOG_INFO("{} starting", GetName());
   REXLOG_INFO("  Game directory: {}", game_data_root_.string());
@@ -137,11 +120,9 @@ bool ReXApp::OnInitialize() {
   if (!update_data_root_.empty()) {
     REXLOG_INFO("  Update data:    {}", update_data_root_.string());
   }
-  REXLOG_INFO("  Cache root:     {}", cache_root_.string());
 
   // Create runtime
-  runtime_ = std::make_unique<rex::Runtime>(game_data_root_, user_data_root_, update_data_root_,
-                                            cache_root_);
+  runtime_ = std::make_unique<rex::Runtime>(game_data_root_, user_data_root_, update_data_root_);
   runtime_->set_app_context(&app_context());
 
   // Build runtime config with default platform backends
@@ -288,17 +269,6 @@ bool ReXApp::OnInitialize() {
       REXLOG_ERROR("Failed to launch module");
       app_context().QuitFromUIThread();
       return;
-    }
-
-    // Initialize shader storage (blocking) before guest execution starts.
-    auto* graphics_system =
-        static_cast<rex::graphics::GraphicsSystem*>(runtime_->graphics_system());
-    if (graphics_system && !runtime_->cache_root().empty()) {
-      uint32_t title_id = runtime_->kernel_state()->title_id();
-      if (title_id != 0) {
-        REXLOG_INFO("Initializing shader storage for title {:08X}...", title_id);
-        graphics_system->InitializeShaderStorage(runtime_->cache_root(), title_id, true);
-      }
     }
 
     OnPostLaunchModule(main_thread.get());

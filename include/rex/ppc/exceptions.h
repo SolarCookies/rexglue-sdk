@@ -1,5 +1,5 @@
 /**
- * @file        platform/exceptions.h
+ * @file        ppc/exceptions.h
  * @brief       Structured Exception Handling (SEH) support for recompiled code
  *
  * @copyright   Copyright (c) 2026 Tom Clay <tomc@tctechstuff.com>
@@ -24,8 +24,7 @@
 #include <exception>
 
 #include <rex/platform.h>
-#include <rex/platform/seh.h>
-#include <rex/types.h>
+#include <rex/ppc/detail/seh.h>
 
 namespace rex {
 
@@ -35,11 +34,15 @@ namespace rex {
 
 /**
  * @brief Exception thrown when hardware exception occurs in SEH-protected code
+ *
+ * This exception is thrown by the SEH translator when a hardware exception
+ * (e.g., access violation, null pointer dereference) occurs. The recompiled
+ * code catches this exception, runs finally handlers, and rethrows.
  */
 class SehException : public std::exception {
  public:
   /// Exception codes matching Windows EXCEPTION_* values
-  enum Code : u32 {
+  enum Code : uint32_t {
     ACCESS_VIOLATION = 0xC0000005,
     IN_PAGE_ERROR = 0xC0000006,
     ILLEGAL_INSTRUCTION = 0xC000001D,
@@ -82,12 +85,24 @@ class SehException : public std::exception {
 // Initialization
 //=============================================================================
 
+/**
+ * @brief Initialize SEH support for the current thread
+ *
+ * On Windows, no per-thread init is needed for native SEH with RaiseException.
+ * On Linux, sets the SEH active flag to false (will be set true by SEH_TRY).
+ */
 inline void initialize_seh_thread() {
-  platform::seh_active() = false;
+  ppc::detail::seh_active() = false;
 }
 
+/**
+ * @brief Initialize SEH support globally
+ *
+ * On Windows, marks SEH as initialized (native SEH needs no setup).
+ * On Linux, installs signal handlers for SIGSEGV, SIGBUS, SIGFPE, SIGILL.
+ */
 inline void initialize_seh() {
-  platform::seh_initialize();
+  ppc::detail::seh_initialize();
 }
 
 //=============================================================================
@@ -96,6 +111,10 @@ inline void initialize_seh() {
 
 #if REX_PLATFORM_WIN32
 
+/**
+ * @brief RAII guard for SEH-protected regions (Windows native SEH version)
+ * Note: This is a no-op on Windows since we use __try/__except directly
+ */
 class SehGuard {
  public:
   SehGuard() = default;
@@ -107,25 +126,29 @@ class SehGuard {
 #define SEH_TRY __try {
 #define SEH_CATCH \
   }               \
-  __except (::rex::platform::seh_filter(GetExceptionCode(), GetExceptionInformation())) {
+  __except (::rex::ppc::detail::seh_filter(GetExceptionCode(), GetExceptionInformation())) {
 #define SEH_CATCH_ALL \
   }                   \
-  __except (::rex::platform::seh_filter(GetExceptionCode(), GetExceptionInformation())) {
-#define SEH_RETHROW ::rex::platform::seh_rethrow()
+  __except (::rex::ppc::detail::seh_filter(GetExceptionCode(), GetExceptionInformation())) {
+#define SEH_RETHROW ::rex::ppc::detail::seh_rethrow()
 
 #define SEH_END }
 
 #else  // !REX_PLATFORM_WIN32
 
+/**
+ * @brief RAII guard for SEH-protected regions (Linux version)
+ */
 class SehGuard {
  public:
   SehGuard() {
-    was_active_ = platform::seh_active();
-    platform::seh_active() = true;
+    was_active_ = ppc::detail::seh_active();
+    ppc::detail::seh_active() = true;
   }
 
-  ~SehGuard() { platform::seh_active() = was_active_; }
+  ~SehGuard() { ppc::detail::seh_active() = was_active_; }
 
+  // Non-copyable
   SehGuard(const SehGuard&) = delete;
   SehGuard& operator=(const SehGuard&) = delete;
 

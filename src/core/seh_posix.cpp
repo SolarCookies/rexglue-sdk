@@ -7,16 +7,16 @@
  */
 
 #include <rex/platform.h>
-#include <rex/platform/seh.h>
+#include <rex/ppc/detail/seh.h>
 
 static_assert(REX_PLATFORM_LINUX || REX_PLATFORM_MAC, "This file is POSIX-only");
 
 #include <signal.h>
 #include <cstdlib>  // std::abort()
 
-#include <rex/platform/exceptions.h>
+#include <rex/ppc/exceptions.h>
 
-namespace rex::platform {
+namespace rex::ppc::detail {
 
 static thread_local SehThreadState tls_seh_state;
 static thread_local bool tls_seh_active = false;
@@ -120,4 +120,4 @@ bool& seh_active() {
   return tls_seh_active;
 }
 
-}  // namespace rex::platform
+}  // namespace rex::ppc::detail

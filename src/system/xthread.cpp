@@ -23,7 +23,7 @@
 #include <rex/logging.h>
 #include <rex/math.h>
 #include <rex/ppc/context.h>
-#include <rex/platform/exceptions.h>
+#include <rex/ppc/exceptions.h>
 #include <rex/runtime.h>
 #include <rex/stream.h>
 #include <rex/system/kernel_state.h>
@@ -386,8 +386,11 @@ X_STATUS XThread::Create() {
   thread_state_ =
       std::make_unique<runtime::ThreadState>(thread_id_, stack_base_, pcr_address_, memory());
 
-  REXSYS_NOISY_DEBUG("XThread{:08X} ({:X}) Stack: {:08X}-{:08X}", handle(), thread_id_,
-                     stack_limit_, stack_base_);
+  // Set kernel state in context for kernel callbacks
+  thread_state_->context()->kernel_state = kernel_state_;
+
+  REXSYS_DEBUG("XThread{:08X} ({:X}) Stack: {:08X}-{:08X}", handle(), thread_id_, stack_limit_,
+               stack_base_);
 
   uint8_t cpu_index = GetFakeCpuNumber(static_cast<uint8_t>(creation_params_.creation_flags >> 24));
 
@@ -543,8 +546,8 @@ X_STATUS XThread::Terminate(int exit_code) {
 }
 
 void XThread::Execute() {
-  REXSYS_NOISY_DEBUG("Execute thid {} (handle={:08X}, '{}', native={:08X})", thread_id_, handle(),
-                     thread_name_, thread_->system_id());
+  REXSYS_DEBUG("Execute thid {} (handle={:08X}, '{}', native={:08X})", thread_id_, handle(),
+               thread_name_, thread_->system_id());
 
   // Let the kernel know we are starting.
   kernel_state_->OnThreadExecute(this);
@@ -618,7 +621,7 @@ void XThread::Execute() {
   main_fiber_ = rex::thread::Fiber::ConvertCurrentThread();
 
   // Execute the function
-  REXSYS_NOISY_DEBUG("XThread::Execute - Calling function at {:08X}", address);
+  REXSYS_DEBUG("XThread::Execute - Calling function at {:08X}", address);
   func(*ctx, base);
 
   exit_code = static_cast<int>(ctx->r3.u32);
@@ -1355,6 +1358,7 @@ object_ref<XThread> XThread::Restore(KernelState* kernel_state, stream::ByteStre
 
   if (state.is_running) {
     auto context = thread->thread_state_->context();
+    context->kernel_state = kernel_state;
     LoadContext(context, state);
 
     // Always retain when starting - the thread owns itself until exited.

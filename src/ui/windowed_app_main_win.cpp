@@ -9,6 +9,7 @@
  * @modified    Tom Clay, 2026 - Adapted for ReXGlue runtime
  */
 
+#include <cstdio>
 #include <cstdlib>
 #include <map>
 #include <memory>
@@ -20,6 +21,8 @@
 #include <rex/platform.h>
 #include <rex/ui/windowed_app.h>
 #include <rex/ui/windowed_app_context_win.h>
+
+REXCVAR_DEFINE_BOOL(enable_console, true, "UI/Window", "Enable console window on Windows");
 
 namespace {
 
@@ -64,7 +67,16 @@ int WINAPI wWinMain(HINSTANCE hinstance, HINSTANCE hinstance_prev, LPWSTR comman
   }
   auto remaining = rex::cvar::Init(static_cast<int>(argv_ptrs.size()), argv_ptrs.data());
   rex::cvar::ApplyEnvironment();
-  rex::InitLoggingEarly();
+
+  // Allocate a console for debugging if enabled
+  if (REXCVAR_GET(enable_console)) {
+    AllocConsole();
+    FILE* fp;
+    freopen_s(&fp, "CONOUT$", "w", stdout);
+    freopen_s(&fp, "CONOUT$", "w", stderr);
+    freopen_s(&fp, "CONIN$", "r", stdin);
+    printf("Console attached for debugging\n");
+  }
 
   int result;
 

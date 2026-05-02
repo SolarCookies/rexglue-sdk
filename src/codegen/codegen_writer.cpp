@@ -215,13 +215,18 @@ bool CodegenWriter::write(bool force) {
 
   auto tmplData = buildTemplateData(ctx_, functions, rexcrtByAddr);
 
-  // Generate {project}_init.h (self-contained: config + declarations + macros)
+  // Generate {project}_config.h
+  REXCODEGEN_TRACE("Recompile: generating {}_config.h", projectName);
+  out = renderWithJson(registry, "codegen/config_h", tmplData);
+  SaveCurrentOutData(fmt::format("{}_config.h", projectName));
+
+  // Generate {project}_init.h
   REXCODEGEN_TRACE("Recompile: generating {}_init.h", projectName);
   out = renderWithJson(registry, "codegen/init_h", tmplData);
   SaveCurrentOutData(fmt::format("{}_init.h", projectName));
 
-  // Generate {project}_init.cpp (PPCImageConfig + PPCFuncMappings)
-  REXCODEGEN_TRACE("Recompile: generating {}_init.cpp", projectName);
+  // Generate {project}_init.cpp
+  REXCODEGEN_TRACE("Recompile: generating {}_init.cpp (function mapping table)", projectName);
   out = renderWithJson(registry, "codegen/init_cpp", tmplData);
   SaveCurrentOutData(fmt::format("{}_init.cpp", projectName));
 
@@ -237,6 +242,7 @@ bool CodegenWriter::write(bool force) {
     out = renderWithJson(registry, "codegen/globals_h", tmplData);
     SaveCurrentOutData(fmt::format("{}_globals.h", projectName));
   }
+
   // Filter out imports and rexcrt functions before recompilation
   std::erase_if(functions, [](const FunctionNode* fn) {
     return fn->authority() == FunctionAuthority::IMPORT;

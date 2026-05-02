@@ -13,8 +13,8 @@
 #include <rex/input/input_system.h>
 #include <rex/kernel/xam/private.h>
 #include <rex/logging.h>
-#include <rex/hook.h>
-#include <rex/types.h>
+#include <rex/ppc/function.h>
+#include <rex/ppc/types.h>
 #include <rex/runtime.h>
 #include <rex/system/kernel_state.h>
 #include <rex/system/xtypes.h>
@@ -42,12 +42,13 @@ void XamResetInactivity_entry() {
   // Do we need to do anything?
 }
 
-u32 XamEnableInactivityProcessing_entry(u32 unk, u32 enable) {
+ppc_u32_result_t XamEnableInactivityProcessing_entry(ppc_u32_t unk, ppc_u32_t enable) {
   return X_ERROR_SUCCESS;
 }
 
 // https://msdn.microsoft.com/en-us/library/windows/desktop/microsoft.directx_sdk.reference.xinputgetcapabilities(v=vs.85).aspx
-u32 XamInputGetCapabilities_entry(u32 user_index, u32 flags, ppc_ptr_t<X_INPUT_CAPABILITIES> caps) {
+ppc_u32_result_t XamInputGetCapabilities_entry(ppc_u32_t user_index, ppc_u32_t flags,
+                                               ppc_ptr_t<X_INPUT_CAPABILITIES> caps) {
   REXKRNL_TRACE("[XAM] XamInputGetCapabilities called: user={}, flags=0x{:X}", (uint32_t)user_index,
                 (uint32_t)flags);
   if (!caps) {
@@ -69,8 +70,9 @@ u32 XamInputGetCapabilities_entry(u32 user_index, u32 flags, ppc_ptr_t<X_INPUT_C
   return is->GetCapabilities(actual_user_index, flags, caps);
 }
 
-u32 XamInputGetCapabilitiesEx_entry(u32 unk, u32 user_index, u32 flags,
-                                    ppc_ptr_t<X_INPUT_CAPABILITIES> caps) {
+ppc_u32_result_t XamInputGetCapabilitiesEx_entry(ppc_u32_t unk, ppc_u32_t user_index,
+                                                 ppc_u32_t flags,
+                                                 ppc_ptr_t<X_INPUT_CAPABILITIES> caps) {
   if (!caps) {
     return X_ERROR_BAD_ARGUMENTS;
   }
@@ -92,7 +94,8 @@ u32 XamInputGetCapabilitiesEx_entry(u32 unk, u32 user_index, u32 flags,
 }
 
 // https://msdn.microsoft.com/en-us/library/windows/desktop/microsoft.directx_sdk.reference.xinputgetstate(v=vs.85).aspx
-u32 XamInputGetState_entry(u32 user_index, u32 flags, ppc_ptr_t<X_INPUT_STATE> input_state) {
+ppc_u32_result_t XamInputGetState_entry(ppc_u32_t user_index, ppc_u32_t flags,
+                                        ppc_ptr_t<X_INPUT_STATE> input_state) {
   // Games call this with a NULL state ptr, probably as a query.
   static int call_count = 0;
   if (++call_count <= 5) {
@@ -116,7 +119,8 @@ u32 XamInputGetState_entry(u32 user_index, u32 flags, ppc_ptr_t<X_INPUT_STATE> i
 }
 
 // https://msdn.microsoft.com/en-us/library/windows/desktop/microsoft.directx_sdk.reference.xinputsetstate(v=vs.85).aspx
-u32 XamInputSetState_entry(u32 user_index, u32 unk, ppc_ptr_t<X_INPUT_VIBRATION> vibration) {
+ppc_u32_result_t XamInputSetState_entry(ppc_u32_t user_index, ppc_u32_t unk,
+                                        ppc_ptr_t<X_INPUT_VIBRATION> vibration) {
   if (!vibration) {
     return X_ERROR_BAD_ARGUMENTS;
   }
@@ -133,7 +137,8 @@ u32 XamInputSetState_entry(u32 user_index, u32 unk, ppc_ptr_t<X_INPUT_VIBRATION>
 }
 
 // https://msdn.microsoft.com/en-us/library/windows/desktop/microsoft.directx_sdk.reference.xinputgetkeystroke(v=vs.85).aspx
-u32 XamInputGetKeystroke_entry(u32 user_index, u32 flags, ppc_ptr_t<X_INPUT_KEYSTROKE> keystroke) {
+ppc_u32_result_t XamInputGetKeystroke_entry(ppc_u32_t user_index, ppc_u32_t flags,
+                                            ppc_ptr_t<X_INPUT_KEYSTROKE> keystroke) {
   // https://github.com/CodeAsm/ffplay360/blob/master/Common/AtgXime.cpp
   // user index = index or XUSER_INDEX_ANY
   // flags = XINPUT_FLAG_GAMEPAD (| _ANYUSER | _ANYDEVICE)
@@ -158,8 +163,8 @@ u32 XamInputGetKeystroke_entry(u32 user_index, u32 flags, ppc_ptr_t<X_INPUT_KEYS
 }
 
 // Same as non-ex, just takes a pointer to user index.
-u32 XamInputGetKeystrokeEx_entry(mapped_u32 user_index_ptr, u32 flags,
-                                 ppc_ptr_t<X_INPUT_KEYSTROKE> keystroke) {
+ppc_u32_result_t XamInputGetKeystrokeEx_entry(ppc_pu32_t user_index_ptr, ppc_u32_t flags,
+                                              ppc_ptr_t<X_INPUT_KEYSTROKE> keystroke) {
   if (!keystroke) {
     return X_ERROR_BAD_ARGUMENTS;
   }
@@ -183,7 +188,8 @@ u32 XamInputGetKeystrokeEx_entry(mapped_u32 user_index_ptr, u32 flags,
   return result;
 }
 
-i32 XamUserGetDeviceContext_entry(u32 user_index, u32 unk, mapped_u32 out_ptr) {
+ppc_hresult_result_t XamUserGetDeviceContext_entry(ppc_u32_t user_index, ppc_u32_t unk,
+                                                   ppc_pu32_t out_ptr) {
   // Games check the result - usually with some masking.
   // If this function fails they assume zero, so let's fail AND
   // set zero just to be safe.
@@ -199,36 +205,36 @@ i32 XamUserGetDeviceContext_entry(u32 user_index, u32 unk, mapped_u32 out_ptr) {
 }  // namespace kernel
 }  // namespace rex
 
-REX_EXPORT(__imp__XamResetInactivity, rex::kernel::xam::XamResetInactivity_entry)
-REX_EXPORT(__imp__XamEnableInactivityProcessing,
+XAM_EXPORT(__imp__XamResetInactivity, rex::kernel::xam::XamResetInactivity_entry)
+XAM_EXPORT(__imp__XamEnableInactivityProcessing,
            rex::kernel::xam::XamEnableInactivityProcessing_entry)
-REX_EXPORT(__imp__XamInputGetCapabilities, rex::kernel::xam::XamInputGetCapabilities_entry)
-REX_EXPORT(__imp__XamInputGetCapabilitiesEx, rex::kernel::xam::XamInputGetCapabilitiesEx_entry)
-REX_EXPORT(__imp__XamInputGetState, rex::kernel::xam::XamInputGetState_entry)
-REX_EXPORT(__imp__XamInputSetState, rex::kernel::xam::XamInputSetState_entry)
-REX_EXPORT(__imp__XamInputGetKeystroke, rex::kernel::xam::XamInputGetKeystroke_entry)
-REX_EXPORT(__imp__XamInputGetKeystrokeEx, rex::kernel::xam::XamInputGetKeystrokeEx_entry)
-REX_EXPORT(__imp__XamUserGetDeviceContext, rex::kernel::xam::XamUserGetDeviceContext_entry)
+XAM_EXPORT(__imp__XamInputGetCapabilities, rex::kernel::xam::XamInputGetCapabilities_entry)
+XAM_EXPORT(__imp__XamInputGetCapabilitiesEx, rex::kernel::xam::XamInputGetCapabilitiesEx_entry)
+XAM_EXPORT(__imp__XamInputGetState, rex::kernel::xam::XamInputGetState_entry)
+XAM_EXPORT(__imp__XamInputSetState, rex::kernel::xam::XamInputSetState_entry)
+XAM_EXPORT(__imp__XamInputGetKeystroke, rex::kernel::xam::XamInputGetKeystroke_entry)
+XAM_EXPORT(__imp__XamInputGetKeystrokeEx, rex::kernel::xam::XamInputGetKeystrokeEx_entry)
+XAM_EXPORT(__imp__XamUserGetDeviceContext, rex::kernel::xam::XamUserGetDeviceContext_entry)
 
-REX_EXPORT_STUB(__imp__XamInputControl);
-REX_EXPORT_STUB(__imp__XamInputEnableAutobind);
-REX_EXPORT_STUB(__imp__XamInputGetDeviceStats);
-REX_EXPORT_STUB(__imp__XamInputGetFailedConnectionOrBind);
-REX_EXPORT_STUB(__imp__XamInputGetKeyLocks);
-REX_EXPORT_STUB(__imp__XamInputGetKeystrokeHud);
-REX_EXPORT_STUB(__imp__XamInputGetKeystrokeHudEx);
-REX_EXPORT_STUB(__imp__XamInputGetUserVibrationLevel);
-REX_EXPORT_STUB(__imp__XamInputNonControllerGetRaw);
-REX_EXPORT_STUB(__imp__XamInputNonControllerGetRawEx);
-REX_EXPORT_STUB(__imp__XamInputNonControllerSetRaw);
-REX_EXPORT_STUB(__imp__XamInputNonControllerSetRawEx);
-REX_EXPORT_STUB(__imp__XamInputRawState);
-REX_EXPORT_STUB(__imp__XamInputResetLayoutKeyboard);
-REX_EXPORT_STUB(__imp__XamInputSendStayAliveRequest);
-REX_EXPORT_STUB(__imp__XamInputSendXenonButtonPress);
-REX_EXPORT_STUB(__imp__XamInputSetKeyLocks);
-REX_EXPORT_STUB(__imp__XamInputSetKeyboardTranslationHud);
-REX_EXPORT_STUB(__imp__XamInputSetLayoutKeyboard);
-REX_EXPORT_STUB(__imp__XamInputSetMinMaxAuthDelay);
-REX_EXPORT_STUB(__imp__XamInputSetTextMessengerIndicator);
-REX_EXPORT_STUB(__imp__XamInputToggleKeyLocks);
+XAM_EXPORT_STUB(__imp__XamInputControl);
+XAM_EXPORT_STUB(__imp__XamInputEnableAutobind);
+XAM_EXPORT_STUB(__imp__XamInputGetDeviceStats);
+XAM_EXPORT_STUB(__imp__XamInputGetFailedConnectionOrBind);
+XAM_EXPORT_STUB(__imp__XamInputGetKeyLocks);
+XAM_EXPORT_STUB(__imp__XamInputGetKeystrokeHud);
+XAM_EXPORT_STUB(__imp__XamInputGetKeystrokeHudEx);
+XAM_EXPORT_STUB(__imp__XamInputGetUserVibrationLevel);
+XAM_EXPORT_STUB(__imp__XamInputNonControllerGetRaw);
+XAM_EXPORT_STUB(__imp__XamInputNonControllerGetRawEx);
+XAM_EXPORT_STUB(__imp__XamInputNonControllerSetRaw);
+XAM_EXPORT_STUB(__imp__XamInputNonControllerSetRawEx);
+XAM_EXPORT_STUB(__imp__XamInputRawState);
+XAM_EXPORT_STUB(__imp__XamInputResetLayoutKeyboard);
+XAM_EXPORT_STUB(__imp__XamInputSendStayAliveRequest);
+XAM_EXPORT_STUB(__imp__XamInputSendXenonButtonPress);
+XAM_EXPORT_STUB(__imp__XamInputSetKeyLocks);
+XAM_EXPORT_STUB(__imp__XamInputSetKeyboardTranslationHud);
+XAM_EXPORT_STUB(__imp__XamInputSetLayoutKeyboard);
+XAM_EXPORT_STUB(__imp__XamInputSetMinMaxAuthDelay);
+XAM_EXPORT_STUB(__imp__XamInputSetTextMessengerIndicator);
+XAM_EXPORT_STUB(__imp__XamInputToggleKeyLocks);

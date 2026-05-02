@@ -12,8 +12,8 @@
 #include <rex/kernel/xam/module.h>
 #include <rex/kernel/xam/private.h>
 #include <rex/logging.h>
-#include <rex/hook.h>
-#include <rex/types.h>
+#include <rex/ppc/function.h>
+#include <rex/ppc/types.h>
 #include <rex/string/util.h>
 #include <rex/system/kernel_state.h>
 #include <rex/system/user_module.h>
@@ -33,7 +33,7 @@ namespace kernel {
 namespace xam {
 using namespace rex::system;
 
-u32 XamFeatureEnabled_entry(u32 unk) {
+ppc_u32_result_t XamFeatureEnabled_entry(ppc_u32_t unk) {
   return 0;
 }
 
@@ -44,7 +44,7 @@ uint8_t schema_bin[] = {
     0x00, 0x2C, 0x00, 0x00, 0x00, 0x00, 0x00, 0x2C, 0x00, 0x00, 0x00, 0x00, 0x00, 0x18,
 };
 
-u32 XamGetOnlineSchema_entry() {
+ppc_u32_result_t XamGetOnlineSchema_entry() {
   static uint32_t schema_guest = 0;
 
   if (!schema_guest) {
@@ -73,7 +73,8 @@ static SYSTEMTIME xeGetLocalSystemTime(uint64_t filetime) {
 }
 #endif
 
-void XamFormatDateString_entry(u32 unk, u64 filetime, mapped_void output_buffer, u32 output_count) {
+void XamFormatDateString_entry(ppc_u32_t unk, ppc_u64_t filetime, ppc_pvoid_t output_buffer,
+                               ppc_u32_t output_count) {
   std::memset(output_buffer, 0, output_count * sizeof(char16_t));
 
 // TODO: implement this for other platforms
@@ -87,7 +88,8 @@ void XamFormatDateString_entry(u32 unk, u64 filetime, mapped_void output_buffer,
 #endif
 }
 
-void XamFormatTimeString_entry(u32 unk, u64 filetime, mapped_void output_buffer, u32 output_count) {
+void XamFormatTimeString_entry(ppc_u32_t unk, ppc_u64_t filetime, ppc_pvoid_t output_buffer,
+                               ppc_u32_t output_count) {
   std::memset(output_buffer, 0, output_count * sizeof(char16_t));
 
 // TODO: implement this for other platforms
@@ -101,9 +103,9 @@ void XamFormatTimeString_entry(u32 unk, u64 filetime, mapped_void output_buffer,
 #endif
 }
 
-u32 keXamBuildResourceLocator(uint64_t module, std::u16string_view container,
-                              std::u16string_view resource, mapped_void buffer_ptr,
-                              uint32_t buffer_count) {
+ppc_u32_result_t keXamBuildResourceLocator(uint64_t module, std::u16string_view container,
+                                           std::u16string_view resource, ppc_pvoid_t buffer_ptr,
+                                           uint32_t buffer_count) {
   std::u16string path;
   if (!module) {
     path = fmt::format(u"file://media:/{}.xzp#{}", container, resource);
@@ -116,14 +118,16 @@ u32 keXamBuildResourceLocator(uint64_t module, std::u16string_view container,
   return 0;
 }
 
-u32 XamBuildResourceLocator_entry(u64 module, mapped_wstring container, mapped_wstring resource,
-                                  mapped_void buffer_ptr, u32 buffer_count) {
+ppc_u32_result_t XamBuildResourceLocator_entry(ppc_u64_t module, ppc_pchar16_t container,
+                                               ppc_pchar16_t resource, ppc_pvoid_t buffer_ptr,
+                                               ppc_u32_t buffer_count) {
   return keXamBuildResourceLocator(module, container.value(), resource.value(), buffer_ptr,
                                    buffer_count);
 }
 
-u32 XamBuildGamercardResourceLocator_entry(mapped_wstring filename, mapped_void buffer_ptr,
-                                           u32 buffer_count) {
+ppc_u32_result_t XamBuildGamercardResourceLocator_entry(ppc_pchar16_t filename,
+                                                        ppc_pvoid_t buffer_ptr,
+                                                        ppc_u32_t buffer_count) {
   // On an actual xbox these funcs would return a locator to xam.xex resources,
   // but for Xenia we can return a locator to the resources as local files. (big
   // thanks to MS for letting XamBuildResourceLocator return local file
@@ -135,23 +139,25 @@ u32 XamBuildGamercardResourceLocator_entry(mapped_wstring filename, mapped_void 
   return keXamBuildResourceLocator(0, u"gamercrd", filename.value(), buffer_ptr, buffer_count);
 }
 
-u32 XamBuildSharedSystemResourceLocator_entry(mapped_wstring filename, mapped_void buffer_ptr,
-                                              u32 buffer_count) {
+ppc_u32_result_t XamBuildSharedSystemResourceLocator_entry(ppc_pchar16_t filename,
+                                                           ppc_pvoid_t buffer_ptr,
+                                                           ppc_u32_t buffer_count) {
   // see notes inside XamBuildGamercardResourceLocator above
   return keXamBuildResourceLocator(0, u"shrdres", filename.value(), buffer_ptr, buffer_count);
 }
 
-u32 XamBuildLegacySystemResourceLocator_entry(mapped_wstring filename, mapped_void buffer_ptr,
-                                              u32 buffer_count) {
+ppc_u32_result_t XamBuildLegacySystemResourceLocator_entry(ppc_pchar16_t filename,
+                                                           ppc_pvoid_t buffer_ptr,
+                                                           ppc_u32_t buffer_count) {
   return XamBuildSharedSystemResourceLocator_entry(filename, buffer_ptr, buffer_count);
 }
 
-u32 XamBuildXamResourceLocator_entry(mapped_wstring filename, mapped_void buffer_ptr,
-                                     u32 buffer_count) {
+ppc_u32_result_t XamBuildXamResourceLocator_entry(ppc_pchar16_t filename, ppc_pvoid_t buffer_ptr,
+                                                  ppc_u32_t buffer_count) {
   return keXamBuildResourceLocator(0, u"xam", filename.value(), buffer_ptr, buffer_count);
 }
 
-u32 XamGetSystemVersion_entry() {
+ppc_u32_result_t XamGetSystemVersion_entry() {
   // eh, just picking one. If we go too low we may break new games, but
   // this value seems to be used for conditionally loading symbols and if
   // we pretend to be old we have less to worry with implementing.
@@ -164,7 +170,7 @@ void XCustomRegisterDynamicActions_entry() {
   // ???
 }
 
-u32 XGetAVPack_entry() {
+ppc_u32_result_t XGetAVPack_entry() {
   // DWORD
   // Not sure what the values are for this, but 6 is VGA.
   // Other likely values are 3/4/8 for HDMI or something.
@@ -178,11 +184,11 @@ uint32_t xeXGetGameRegion() {
   return 0xFFFFu;
 }
 
-u32 XGetGameRegion_entry() {
+ppc_u32_result_t XGetGameRegion_entry() {
   return xeXGetGameRegion();
 }
 
-u32 XGetLanguage_entry() {
+ppc_u32_result_t XGetLanguage_entry() {
   auto desired_language = XLanguage::kEnglish;
 
   // Switch the language based on game region.
@@ -198,7 +204,7 @@ u32 XGetLanguage_entry() {
   return uint32_t(desired_language);
 }
 
-u32 XamGetCurrentTitleId_entry() {
+ppc_u32_result_t XamGetCurrentTitleId_entry() {
   // NOTE(tomc): Switched this up to get title ID from executable module instead of runtime
   // (emulator)
   auto module = REX_KERNEL_STATE()->GetExecutableModule();
@@ -208,7 +214,7 @@ u32 XamGetCurrentTitleId_entry() {
   return 0;
 }
 
-u32 XamGetExecutionId_entry(mapped_u32 info_ptr) {
+ppc_u32_result_t XamGetExecutionId_entry(ppc_pu32_t info_ptr) {
   auto module = REX_KERNEL_STATE()->GetExecutableModule();
   assert_not_null(module);
 
@@ -223,7 +229,7 @@ u32 XamGetExecutionId_entry(mapped_u32 info_ptr) {
   return X_STATUS_SUCCESS;
 }
 
-u32 XamLoaderSetLaunchData_entry(mapped_void data, u32 size) {
+ppc_u32_result_t XamLoaderSetLaunchData_entry(ppc_pvoid_t data, ppc_u32_t size) {
   auto xam = REX_KERNEL_STATE()->GetKernelModule<XamModule>("xam.xex");
   auto& loader_data = xam->loader_data();
   loader_data.launch_data_present = size ? true : false;
@@ -232,7 +238,7 @@ u32 XamLoaderSetLaunchData_entry(mapped_void data, u32 size) {
   return 0;
 }
 
-u32 XamLoaderGetLaunchDataSize_entry(mapped_u32 size_ptr) {
+ppc_u32_result_t XamLoaderGetLaunchDataSize_entry(ppc_pu32_t size_ptr) {
   if (!size_ptr) {
     return X_ERROR_INVALID_PARAMETER;
   }
@@ -248,7 +254,7 @@ u32 XamLoaderGetLaunchDataSize_entry(mapped_u32 size_ptr) {
   return X_ERROR_SUCCESS;
 }
 
-u32 XamLoaderGetLaunchData_entry(mapped_void buffer_ptr, u32 buffer_size) {
+ppc_u32_result_t XamLoaderGetLaunchData_entry(ppc_pvoid_t buffer_ptr, ppc_u32_t buffer_size) {
   auto xam = REX_KERNEL_STATE()->GetKernelModule<XamModule>("xam.xex");
   auto& loader_data = xam->loader_data();
   if (!loader_data.launch_data_present) {
@@ -260,7 +266,7 @@ u32 XamLoaderGetLaunchData_entry(mapped_void buffer_ptr, u32 buffer_size) {
   return X_ERROR_SUCCESS;
 }
 
-void XamLoaderLaunchTitle_entry(mapped_string raw_name_ptr, u32 flags) {
+void XamLoaderLaunchTitle_entry(ppc_pchar_t raw_name_ptr, ppc_u32_t flags) {
   auto xam = REX_KERNEL_STATE()->GetKernelModule<XamModule>("xam.xex");
 
   auto& loader_data = xam->loader_data();
@@ -293,7 +299,7 @@ void XamLoaderTerminateTitle_entry() {
   REX_KERNEL_STATE()->TerminateTitle();
 }
 
-u32 XamAlloc_entry(u32 unk, u32 size, mapped_u32 out_ptr) {
+ppc_u32_result_t XamAlloc_entry(ppc_u32_t unk, ppc_u32_t size, ppc_pu32_t out_ptr) {
   assert_true(unk == 0);
 
   // Allocate from the heap. Not sure why XAM does this specially, perhaps
@@ -304,25 +310,25 @@ u32 XamAlloc_entry(u32 unk, u32 size, mapped_u32 out_ptr) {
   return X_ERROR_SUCCESS;
 }
 
-u32 XamFree_entry(mapped_u32 ptr) {
+ppc_u32_result_t XamFree_entry(ppc_pu32_t ptr) {
   REX_KERNEL_MEMORY()->SystemHeapFree(ptr.guest_address());
 
   return X_ERROR_SUCCESS;
 }
 
-u32 XamQueryLiveHiveW_entry(mapped_wstring name, mapped_void out_buf, u32 out_size,
-                            u32 type /* guess */) {
+ppc_u32_result_t XamQueryLiveHiveW_entry(ppc_pchar16_t name, ppc_pvoid_t out_buf,
+                                         ppc_u32_t out_size, ppc_u32_t type /* guess */) {
   return X_STATUS_INVALID_PARAMETER_1;
 }
 
-u32 XamLoaderGetDvdTrayState_entry(mapped_u32 out_state) {
+ppc_u32_result_t XamLoaderGetDvdTrayState_entry(ppc_pu32_t out_state) {
   // 0 = tray open, 1 = tray closed with disc
   if (out_state)
     *out_state = 1;
   return X_STATUS_SUCCESS;
 }
 
-u32 XamSwapDisc_entry(u32 disc_number) {
+ppc_u32_result_t XamSwapDisc_entry(ppc_u32_t disc_number) {
   // Stub for multi-disc games. Single-disc games (like Blue Dragon's reblue test)
   // don't need this, but the game may look it up dynamically via XexGetProcedureAddress.
   REXKRNL_DEBUG("XamSwapDisc({}) - stub, returning success", (uint32_t)disc_number);
@@ -333,33 +339,33 @@ u32 XamSwapDisc_entry(u32 disc_number) {
 }  // namespace kernel
 }  // namespace rex
 
-REX_EXPORT(__imp__XamFeatureEnabled, rex::kernel::xam::XamFeatureEnabled_entry)
-REX_EXPORT(__imp__XamGetOnlineSchema, rex::kernel::xam::XamGetOnlineSchema_entry)
-REX_EXPORT(__imp__XamFormatDateString, rex::kernel::xam::XamFormatDateString_entry)
-REX_EXPORT(__imp__XamFormatTimeString, rex::kernel::xam::XamFormatTimeString_entry)
-REX_EXPORT(__imp__XamBuildResourceLocator, rex::kernel::xam::XamBuildResourceLocator_entry)
-REX_EXPORT(__imp__XamBuildGamercardResourceLocator,
+XAM_EXPORT(__imp__XamFeatureEnabled, rex::kernel::xam::XamFeatureEnabled_entry)
+XAM_EXPORT(__imp__XamGetOnlineSchema, rex::kernel::xam::XamGetOnlineSchema_entry)
+XAM_EXPORT(__imp__XamFormatDateString, rex::kernel::xam::XamFormatDateString_entry)
+XAM_EXPORT(__imp__XamFormatTimeString, rex::kernel::xam::XamFormatTimeString_entry)
+XAM_EXPORT(__imp__XamBuildResourceLocator, rex::kernel::xam::XamBuildResourceLocator_entry)
+XAM_EXPORT(__imp__XamBuildGamercardResourceLocator,
            rex::kernel::xam::XamBuildGamercardResourceLocator_entry)
-REX_EXPORT(__imp__XamBuildSharedSystemResourceLocator,
+XAM_EXPORT(__imp__XamBuildSharedSystemResourceLocator,
            rex::kernel::xam::XamBuildSharedSystemResourceLocator_entry)
-REX_EXPORT(__imp__XamBuildLegacySystemResourceLocator,
+XAM_EXPORT(__imp__XamBuildLegacySystemResourceLocator,
            rex::kernel::xam::XamBuildLegacySystemResourceLocator_entry)
-REX_EXPORT(__imp__XamBuildXamResourceLocator, rex::kernel::xam::XamBuildXamResourceLocator_entry)
-REX_EXPORT(__imp__XamGetSystemVersion, rex::kernel::xam::XamGetSystemVersion_entry)
-REX_EXPORT(__imp__XCustomRegisterDynamicActions,
+XAM_EXPORT(__imp__XamBuildXamResourceLocator, rex::kernel::xam::XamBuildXamResourceLocator_entry)
+XAM_EXPORT(__imp__XamGetSystemVersion, rex::kernel::xam::XamGetSystemVersion_entry)
+XAM_EXPORT(__imp__XCustomRegisterDynamicActions,
            rex::kernel::xam::XCustomRegisterDynamicActions_entry)
-REX_EXPORT(__imp__XGetAVPack, rex::kernel::xam::XGetAVPack_entry)
-REX_EXPORT(__imp__XGetGameRegion, rex::kernel::xam::XGetGameRegion_entry)
-REX_EXPORT(__imp__XGetLanguage, rex::kernel::xam::XGetLanguage_entry)
-REX_EXPORT(__imp__XamGetCurrentTitleId, rex::kernel::xam::XamGetCurrentTitleId_entry)
-REX_EXPORT(__imp__XamGetExecutionId, rex::kernel::xam::XamGetExecutionId_entry)
-REX_EXPORT(__imp__XamLoaderSetLaunchData, rex::kernel::xam::XamLoaderSetLaunchData_entry)
-REX_EXPORT(__imp__XamLoaderGetLaunchDataSize, rex::kernel::xam::XamLoaderGetLaunchDataSize_entry)
-REX_EXPORT(__imp__XamLoaderGetLaunchData, rex::kernel::xam::XamLoaderGetLaunchData_entry)
-REX_EXPORT(__imp__XamLoaderLaunchTitle, rex::kernel::xam::XamLoaderLaunchTitle_entry)
-REX_EXPORT(__imp__XamLoaderTerminateTitle, rex::kernel::xam::XamLoaderTerminateTitle_entry)
-REX_EXPORT(__imp__XamAlloc, rex::kernel::xam::XamAlloc_entry)
-REX_EXPORT(__imp__XamFree, rex::kernel::xam::XamFree_entry)
-REX_EXPORT(__imp__XamQueryLiveHiveW, rex::kernel::xam::XamQueryLiveHiveW_entry)
-REX_EXPORT(__imp__XamLoaderGetDvdTrayState, rex::kernel::xam::XamLoaderGetDvdTrayState_entry)
-REX_EXPORT(__imp__XamSwapDisc, rex::kernel::xam::XamSwapDisc_entry)
+XAM_EXPORT(__imp__XGetAVPack, rex::kernel::xam::XGetAVPack_entry)
+XAM_EXPORT(__imp__XGetGameRegion, rex::kernel::xam::XGetGameRegion_entry)
+XAM_EXPORT(__imp__XGetLanguage, rex::kernel::xam::XGetLanguage_entry)
+XAM_EXPORT(__imp__XamGetCurrentTitleId, rex::kernel::xam::XamGetCurrentTitleId_entry)
+XAM_EXPORT(__imp__XamGetExecutionId, rex::kernel::xam::XamGetExecutionId_entry)
+XAM_EXPORT(__imp__XamLoaderSetLaunchData, rex::kernel::xam::XamLoaderSetLaunchData_entry)
+XAM_EXPORT(__imp__XamLoaderGetLaunchDataSize, rex::kernel::xam::XamLoaderGetLaunchDataSize_entry)
+XAM_EXPORT(__imp__XamLoaderGetLaunchData, rex::kernel::xam::XamLoaderGetLaunchData_entry)
+XAM_EXPORT(__imp__XamLoaderLaunchTitle, rex::kernel::xam::XamLoaderLaunchTitle_entry)
+XAM_EXPORT(__imp__XamLoaderTerminateTitle, rex::kernel::xam::XamLoaderTerminateTitle_entry)
+XAM_EXPORT(__imp__XamAlloc, rex::kernel::xam::XamAlloc_entry)
+XAM_EXPORT(__imp__XamFree, rex::kernel::xam::XamFree_entry)
+XAM_EXPORT(__imp__XamQueryLiveHiveW, rex::kernel::xam::XamQueryLiveHiveW_entry)
+XAM_EXPORT(__imp__XamLoaderGetDvdTrayState, rex::kernel::xam::XamLoaderGetDvdTrayState_entry)
+XAM_EXPORT(__imp__XamSwapDisc, rex::kernel::xam::XamSwapDisc_entry)

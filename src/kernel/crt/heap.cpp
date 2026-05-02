@@ -15,7 +15,7 @@
 
 #include <rex/cvar.h>
 #include <rex/math.h>
-#include <rex/hook.h>
+#include <rex/ppc/function.h>
 #include <rex/system/xmemory.h>
 #include <rex/logging.h>
 
@@ -26,6 +26,8 @@ REXCVAR_DEFINE_BOOL(rexcrt_heap_enable, false, "crt",
 REXCVAR_DEFINE_UINT32(rexcrt_heap_size_mb, 256, "crt", "Heap size in megabytes")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly)
     .range(1, 2048);
+
+using namespace rex::ppc;
 
 // ---------------------------------------------------------------------------
 // Size header: prepended to every allocation so we can answer RtlSizeHeap
@@ -330,20 +332,21 @@ HeapDiagnostics ReXHeap::GetDiagnosticsLocked() const {
 
 ReXHeap g_heap;
 
-u32 RtlAllocateHeap_entry(u32 hHeap, u32 dwFlags, u32 dwBytes) {
+ppc_u32_result_t RtlAllocateHeap_entry(ppc_u32_t hHeap, ppc_u32_t dwFlags, ppc_u32_t dwBytes) {
   return g_heap.Alloc(dwBytes, dwFlags & HEAP_ZERO_MEMORY);
 }
 
-u32 RtlFreeHeap_entry(u32 hHeap, u32 dwFlags, u32 ptr) {
+ppc_u32_result_t RtlFreeHeap_entry(ppc_u32_t hHeap, ppc_u32_t dwFlags, ppc_u32_t ptr) {
   g_heap.Free(static_cast<uint32_t>(ptr));
   return 1;
 }
 
-u32 RtlSizeHeap_entry(u32 hHeap, u32 dwFlags, u32 ptr) {
+ppc_u32_result_t RtlSizeHeap_entry(ppc_u32_t hHeap, ppc_u32_t dwFlags, ppc_u32_t ptr) {
   return g_heap.Size(static_cast<uint32_t>(ptr));
 }
 
-u32 RtlReAllocateHeap_entry(u32 hHeap, u32 dwFlags, u32 ptr, u32 dwBytes) {
+ppc_u32_result_t RtlReAllocateHeap_entry(ppc_u32_t hHeap, ppc_u32_t dwFlags, ppc_u32_t ptr,
+                                         ppc_u32_t dwBytes) {
   return g_heap.Realloc(static_cast<uint32_t>(ptr), dwBytes, dwFlags & HEAP_ZERO_MEMORY);
 }
 
@@ -357,7 +360,7 @@ ReXHeap& GetHeap() {
 
 }  // namespace rex::kernel::crt
 
-REX_HOOK(rexcrt_RtlAllocateHeap, rex::kernel::crt::RtlAllocateHeap_entry)
-REX_HOOK(rexcrt_RtlFreeHeap, rex::kernel::crt::RtlFreeHeap_entry)
-REX_HOOK(rexcrt_RtlSizeHeap, rex::kernel::crt::RtlSizeHeap_entry)
-REX_HOOK(rexcrt_RtlReAllocateHeap, rex::kernel::crt::RtlReAllocateHeap_entry)
+REXCRT_EXPORT(rexcrt_RtlAllocateHeap, rex::kernel::crt::RtlAllocateHeap_entry)
+REXCRT_EXPORT(rexcrt_RtlFreeHeap, rex::kernel::crt::RtlFreeHeap_entry)
+REXCRT_EXPORT(rexcrt_RtlSizeHeap, rex::kernel::crt::RtlSizeHeap_entry)
+REXCRT_EXPORT(rexcrt_RtlReAllocateHeap, rex::kernel::crt::RtlReAllocateHeap_entry)

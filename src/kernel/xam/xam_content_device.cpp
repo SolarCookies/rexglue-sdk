@@ -12,8 +12,8 @@
 #include <rex/kernel/xam/private.h>
 #include <rex/logging.h>
 #include <rex/math.h>
-#include <rex/hook.h>
-#include <rex/types.h>
+#include <rex/ppc/function.h>
+#include <rex/ppc/types.h>
 #include <rex/system/kernel_state.h>
 #include <rex/system/xam/content_device.h>
 #include <rex/system/xenumerator.h>
@@ -63,7 +63,8 @@ const DummyDeviceInfo* GetDummyDeviceInfo(uint32_t device_id) {
   return it == end ? nullptr : *it;
 }
 
-u32 XamContentGetDeviceName_entry(u32 device_id, mapped_wstring name_buffer, u32 name_capacity) {
+ppc_u32_result_t XamContentGetDeviceName_entry(ppc_u32_t device_id, ppc_pchar16_t name_buffer,
+                                               ppc_u32_t name_capacity) {
   auto device_info = GetDummyDeviceInfo(device_id);
   if (device_info == nullptr) {
     return X_ERROR_DEVICE_NOT_CONNECTED;
@@ -76,7 +77,7 @@ u32 XamContentGetDeviceName_entry(u32 device_id, mapped_wstring name_buffer, u32
   return X_ERROR_SUCCESS;
 }
 
-u32 XamContentGetDeviceState_entry(u32 device_id, mapped_void overlapped_ptr) {
+ppc_u32_result_t XamContentGetDeviceState_entry(ppc_u32_t device_id, ppc_pvoid_t overlapped_ptr) {
   auto device_info = GetDummyDeviceInfo(device_id);
   if (device_info == nullptr) {
     if (overlapped_ptr) {
@@ -108,7 +109,8 @@ typedef struct {
 } X_CONTENT_DEVICE_DATA;
 static_assert_size(X_CONTENT_DEVICE_DATA, 0x50);
 
-u32 XamContentGetDeviceData_entry(u32 device_id, ppc_ptr_t<X_CONTENT_DEVICE_DATA> device_data) {
+ppc_u32_result_t XamContentGetDeviceData_entry(ppc_u32_t device_id,
+                                               ppc_ptr_t<X_CONTENT_DEVICE_DATA> device_data) {
   auto device_info = GetDummyDeviceInfo(device_id);
   if (device_info == nullptr) {
     return X_ERROR_DEVICE_NOT_CONNECTED;
@@ -123,8 +125,11 @@ u32 XamContentGetDeviceData_entry(u32 device_id, ppc_ptr_t<X_CONTENT_DEVICE_DATA
   return X_ERROR_SUCCESS;
 }
 
-u32 XamContentCreateDeviceEnumerator_entry(u32 content_type, u32 content_flags, u32 max_count,
-                                           mapped_u32 buffer_size_ptr, mapped_u32 handle_out) {
+ppc_u32_result_t XamContentCreateDeviceEnumerator_entry(ppc_u32_t content_type,
+                                                        ppc_u32_t content_flags,
+                                                        ppc_u32_t max_count,
+                                                        ppc_pu32_t buffer_size_ptr,
+                                                        ppc_pu32_t handle_out) {
   assert_not_null(handle_out);
 
   if (buffer_size_ptr) {
@@ -172,16 +177,16 @@ const DummyDeviceInfo* GetDummyDeviceInfo(uint32_t device_id) {
 }  // namespace system
 }  // namespace rex
 
-REX_EXPORT(__imp__XamContentGetDeviceName, rex::kernel::xam::XamContentGetDeviceName_entry)
-REX_EXPORT(__imp__XamContentGetDeviceState, rex::kernel::xam::XamContentGetDeviceState_entry)
-REX_EXPORT(__imp__XamContentGetDeviceData, rex::kernel::xam::XamContentGetDeviceData_entry)
-REX_EXPORT(__imp__XamContentCreateDeviceEnumerator,
+XAM_EXPORT(__imp__XamContentGetDeviceName, rex::kernel::xam::XamContentGetDeviceName_entry)
+XAM_EXPORT(__imp__XamContentGetDeviceState, rex::kernel::xam::XamContentGetDeviceState_entry)
+XAM_EXPORT(__imp__XamContentGetDeviceData, rex::kernel::xam::XamContentGetDeviceData_entry)
+XAM_EXPORT(__imp__XamContentCreateDeviceEnumerator,
            rex::kernel::xam::XamContentCreateDeviceEnumerator_entry)
 
-REX_EXPORT_STUB(__imp__XamContentAddCacheDevice);
-REX_EXPORT_STUB(__imp__XamContentDeviceCheckUpdates);
-REX_EXPORT_STUB(__imp__XamContentGetDefaultDevice);
-REX_EXPORT_STUB(__imp__XamContentGetDeviceSerialNumber);
-REX_EXPORT_STUB(__imp__XamContentGetDeviceVolumePath);
-REX_EXPORT_STUB(__imp__XamContentGetLocalizedDeviceData);
-REX_EXPORT_STUB(__imp__XamContentRemoveCacheDevice);
+XAM_EXPORT_STUB(__imp__XamContentAddCacheDevice);
+XAM_EXPORT_STUB(__imp__XamContentDeviceCheckUpdates);
+XAM_EXPORT_STUB(__imp__XamContentGetDefaultDevice);
+XAM_EXPORT_STUB(__imp__XamContentGetDeviceSerialNumber);
+XAM_EXPORT_STUB(__imp__XamContentGetDeviceVolumePath);
+XAM_EXPORT_STUB(__imp__XamContentGetLocalizedDeviceData);
+XAM_EXPORT_STUB(__imp__XamContentRemoveCacheDevice);
