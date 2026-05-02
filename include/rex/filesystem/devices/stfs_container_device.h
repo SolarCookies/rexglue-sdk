@@ -11,7 +11,7 @@
 
 #pragma once
 
-#include "stfs_xbox.h"
+#include <rex/filesystem/devices/stfs_xbox.h>
 
 #include <map>
 #include <memory>
@@ -48,6 +48,12 @@ class StfsContainerDevice : public Device {
   const std::string& name() const override { return name_; }
   uint32_t attributes() const override { return 0; }
   uint32_t component_name_max_length() const override { return 40; }
+  const StfsHeader& header() const { return header_; }
+
+  // Reads and validates the StfsHeader from an STFS package file without
+  // mounting the device. Returns nullptr if the file is missing, too small,
+  // or has an invalid magic.
+  static std::unique_ptr<StfsHeader> ReadPackageHeader(const std::filesystem::path& file_path);
 
   uint32_t total_allocation_units() const override {
     if (header_.metadata.volume_type == XContentVolumeType::kStfs) {

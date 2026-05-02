@@ -294,7 +294,7 @@ struct BuilderContext {
   void emit_vec_int_binary_swapped(const char* simd_op, const char* element_type);
 
   /**
-   * @brief Emit variable shift: vD = rex::simde_mm_{shift_dir}_{element_type}(vA, vB & mask)
+   * @brief Emit variable shift: vD = rex::ppc::simde_mm_{shift_dir}_{element_type}(vA, vB & mask)
    * @param shift_dir The shift direction ("sllv", "srlv", or "srav")
    * @param element_type The SIMDE element type suffix ("epi16")
    * @param mask_value Shift amount mask (e.g., 0xF for 16-bit)
@@ -310,7 +310,7 @@ struct BuilderContext {
 
   /**
    * @brief Emit load with D-form addressing: rD = LOAD(rA + offset)
-   * @param load_macro The PPC load macro name (e.g., "PPC_LOAD_U8", "PPC_LOAD_U32")
+   * @param load_macro The load macro name (e.g., "REX_LOAD_U8", "REX_LOAD_U32")
    * @param dest_type The destination type suffix (e.g., "u64", "s64")
    * @param check_mmio If true, uses mmio_load() to detect memory-mapped I/O
    *
@@ -321,7 +321,7 @@ struct BuilderContext {
 
   /**
    * @brief Emit load with X-form addressing: rD = LOAD(rA + rB)
-   * @param load_macro The PPC load macro name
+   * @param load_macro The load macro name
    * @param dest_type The destination type suffix
    * @param check_mmio If true, uses mmio_load_x_form() to detect memory-mapped I/O
    *
@@ -332,7 +332,7 @@ struct BuilderContext {
 
   /**
    * @brief Emit store with D-form addressing: STORE(rA + offset, rS)
-   * @param store_macro The PPC store macro name (e.g., "PPC_STORE_U8")
+   * @param store_macro The store macro name (e.g., "REX_STORE_U8")
    * @param src_type The source type suffix (e.g., "u8", "u32")
    * @param check_mmio If true, uses mmio_store() to detect memory-mapped I/O
    *
@@ -342,7 +342,7 @@ struct BuilderContext {
 
   /**
    * @brief Emit store with X-form addressing: STORE(rA + rB, rS)
-   * @param store_macro The PPC store macro name
+   * @param store_macro The store macro name
    * @param src_type The source type suffix
    * @param check_mmio If true, uses mmio_store() to detect memory-mapped I/O
    *
