@@ -58,6 +58,29 @@ if(NOT fidelityfx_POPULATED)
     FetchContent_Populate(fidelityfx)
 endif()
 
+# ── Workaround: convert UTF-16 .rc files to UTF-8 ────────────────────────
+# Upstream FidelityFX ships some Windows resource scripts (e.g.
+# ffx-api/src/resource/ffx_api_dll.rc) encoded as UTF-16 LE with a BOM.
+# `llvm-rc` (used by clang on Windows) rejects UTF-16 with:
+#   "fatal error: UTF-16 (LE) byte order mark detected ..."
+# Rewrite any such file in place as UTF-8 so the build succeeds with clang.
+file(GLOB_RECURSE _rexglue_ffx_rc_files
+    "${fidelityfx_SOURCE_DIR}/*.rc")
+foreach(_rc IN LISTS _rexglue_ffx_rc_files)
+    file(READ "${_rc}" _rc_head LIMIT 2 HEX)
+    # UTF-16 LE BOM = 0xFF 0xFE
+    if(_rc_head STREQUAL "fffe")
+        message(STATUS "rexglue: converting UTF-16 .rc to UTF-8: ${_rc}")
+        file(STRINGS "${_rc}" _rc_lines ENCODING UTF-8)
+        set(_rc_text "")
+        foreach(_line IN LISTS _rc_lines)
+            string(APPEND _rc_text "${_line}\n")
+        endforeach()
+        file(WRITE "${_rc}" "${_rc_text}")
+    endif()
+endforeach()
+unset(_rexglue_ffx_rc_files)
+
 set(REXGLUE_FIDELITYFX_SOURCE_DIR "${fidelityfx_SOURCE_DIR}" CACHE INTERNAL
     "Root of the fetched FidelityFX SDK source tree")
 
