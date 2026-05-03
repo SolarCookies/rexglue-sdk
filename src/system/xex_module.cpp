@@ -11,6 +11,7 @@
 
 #include "crypto/TinySHA1.hpp"
 #if defined(REX_USE_WINDOWS_PE_HEADERS)
+#define NOMINMAX  // Prevent min/max macros from conflicting with std::min/max
 #include <windows.h>
 #include <winnt.h>
 #ifndef IMAGE_FILE_MACHINE_POWERPCBE
