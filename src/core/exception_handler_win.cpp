@@ -49,13 +49,12 @@ LONG CALLBACK ExceptionHandlerCallback(PEXCEPTION_POINTERS ex_info) {
   std::memcpy(thread_context.xmm_registers, &ex_info->ContextRecord->Xmm0,
               sizeof(thread_context.xmm_registers));
 #elif defined(_M_ARM64) || defined(REX_ARCH_ARM64)
-  // ARM64: Map CONTEXT fields to HostThreadContext
+  // ARM64: Map CONTEXT fields to HostThreadContext (no Pstate field)
   for (int i = 0; i < 31; ++i) {
     thread_context.x[i] = ex_info->ContextRecord->X[i];
   }
   thread_context.sp = ex_info->ContextRecord->Sp;
   thread_context.pc = ex_info->ContextRecord->Pc;
-  thread_context.pstate = ex_info->ContextRecord->Pstate;
   thread_context.fpsr = ex_info->ContextRecord->Fpsr;
   thread_context.fpcr = ex_info->ContextRecord->Fpcr;
   std::memcpy(thread_context.v, ex_info->ContextRecord->V, sizeof(thread_context.v));
@@ -112,7 +111,6 @@ LONG CALLBACK ExceptionHandlerCallback(PEXCEPTION_POINTERS ex_info) {
 #elif defined(_M_ARM64) || defined(REX_ARCH_ARM64)
       ex_info->ContextRecord->Pc = thread_context.pc;
       ex_info->ContextRecord->Sp = thread_context.sp;
-      ex_info->ContextRecord->Pstate = thread_context.pstate;
       ex_info->ContextRecord->Fpsr = thread_context.fpsr;
       ex_info->ContextRecord->Fpcr = thread_context.fpcr;
       for (int i = 0; i < 31; ++i) {
