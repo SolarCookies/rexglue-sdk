@@ -10,6 +10,26 @@
  */
 
 #include "crypto/TinySHA1.hpp"
+#if defined(REX_USE_WINDOWS_PE_HEADERS)
+#define NOMINMAX  // Prevent min/max macros from conflicting with std::min/max
+#include <windows.h>
+#include <winnt.h>
+#ifndef IMAGE_FILE_MACHINE_POWERPCBE
+#define IMAGE_FILE_MACHINE_POWERPCBE 0x01F2
+#endif
+#ifndef IMAGE_SIZEOF_NT_OPTIONAL_HEADER
+#define IMAGE_SIZEOF_NT_OPTIONAL_HEADER 224
+#endif
+#ifndef IMAGE_NT_OPTIONAL_HDR32_MAGIC
+#define IMAGE_NT_OPTIONAL_HDR32_MAGIC 0x10b
+#endif
+#ifndef IMAGE_SUBSYSTEM_XBOX
+#define IMAGE_SUBSYSTEM_XBOX 14
+#endif
+#ifndef IMAGE_FILE_32BIT_MACHINE
+#define IMAGE_FILE_32BIT_MACHINE 0x0100
+#endif
+#endif
 #include "crypto/rijndael-alg-fst.c"
 #include "crypto/rijndael-alg-fst.h"
 #include "pe/pe_image.h"

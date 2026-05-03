@@ -72,6 +72,12 @@ if(WIN32)
     target_link_libraries(rexsystem PRIVATE ws2_32)
 endif()
 
+# Avoid PE struct redefinition errors by using Windows PE headers on Windows
+if(WIN32)
+    target_link_libraries(rexsystem PRIVATE ws2_32)
+    target_compile_definitions(rexsystem PRIVATE REX_USE_WINDOWS_PE_HEADERS)
+endif()
+
 # Propagate graphics backend selection
 if(REXGLUE_USE_D3D12)
     target_compile_definitions(rexsystem PUBLIC REX_HAS_D3D12=1)

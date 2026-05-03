@@ -1,5 +1,10 @@
 /* Xenia: minor tweaks to bring up to date with winnt.h */
 
+// If REX_USE_WINDOWS_PE_HEADERS is defined, skip all PE struct definitions in this file.
+#ifdef REX_USE_WINDOWS_PE_HEADERS
+#pragma once
+#else
+
 /* Copyright (c) Microsoft Corporation. All rights reserved. */
 /* NT image format (to be used when the Win32 SDK version of WINNT.H cannot) */
 
@@ -20,6 +25,7 @@
 
 /*  Skip if WINNT.H already included.  We check IMAGE_NT_SIGNATURE instead of _WINNT_,
  *  because WinCE's version of WINNT.H defines _WINNT_ but it doesn't include everything here
+ *  Also skip if REX_USE_WINDOWS_PE_HEADERS is defined.
  */
 #ifndef IMAGE_NT_SIGNATURE
 
@@ -969,6 +975,7 @@ typedef struct _IMAGE_SEPARATE_DEBUG_HEADER {
 #define IMAGE_SEPARATE_DEBUG_SIGNATURE 0x4944
 
 #endif /* IMAGE_NT_SIGNATURE */
+#endif /* REX_USE_WINDOWS_PE_HEADERS */
 
 
 #ifdef USES_COMPLUS20
