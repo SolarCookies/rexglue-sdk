@@ -69,7 +69,7 @@ target_link_libraries(rexsystem
 )
 
 if(WIN32)
-    target_link_libraries(rexsystem PRIVATE ws2_32)
+    target_link_libraries(rexsystem PRIVATE ws2_32 psapi)
 endif()
 
 # Avoid PE struct redefinition errors by using Windows PE headers on Windows

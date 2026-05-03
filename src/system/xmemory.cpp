@@ -29,9 +29,9 @@
 #include <rex/system/xtypes.h>
 
 #if REX_PLATFORM_WIN32
+#define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include <psapi.h>
-#include <rex/platform/injection_guard.h>
 #endif
 
 REXCVAR_DEFINE_BOOL(protect_zero, true, "Memory", "Protect the zero page from reads and writes")
@@ -136,50 +136,44 @@ bool Memory::Initialize() {
   file_name_ = fmt::format("xenia_memory_{}", chrono::Clock::QueryHostTickCount());
 
 #if REX_PLATFORM_WIN32
-  // Enable anti-injection protection to prevent overlay DLLs from loading
-  // This MUST be called before any memory mapping, as overlays like RivaTuner
-  // can reserve address ranges we need for Xbox 360 guest memory.
-  if (rex::platform::EnableAntiInjectionProtection()) {
-    REXSYS_INFO("Anti-injection protection enabled successfully");
-  } else {
-    REXSYS_WARN("Failed to enable anti-injection protection - overlay conflicts may occur");
-  }
-
-  // Detect any overlays that are already loaded (if they injected before we could prevent it)
-  // This shows a message box to the user if critical overlays are found.
-  if (rex::platform::DetectOverlayConflicts(true)) {
-    REXSYS_WARN("Overlay software detected - memory conflicts may cause crashes");
-  }
-
-  // Legacy detection code (kept for additional logging)
-  HMODULE overlay_modules[] = {
-      GetModuleHandleA("RTSSHooks64.dll"),      // RivaTuner Statistics Server
-      GetModuleHandleA("RTSSHooks.dll"),        // RivaTuner Statistics Server (32-bit)
-      GetModuleHandleA("MSIAfterburner.dll"),   // MSI Afterburner
-      GetModuleHandleA("discord_hook.dll"),     // Discord overlay (old)
-      GetModuleHandleA("DiscordHook64.dll"),    // Discord overlay
+  // Detect problematic overlay DLLs (passive detection only - no blocking)
+  // These overlays can reserve memory addresses needed for Xbox 360 memory mapping
+  const char* known_overlays[] = {
+      "RTSSHooks64.dll",      // RivaTuner Statistics Server
+      "RTSSHooks.dll",        // RivaTuner (32-bit)
+      "MSIAfterburner.dll",   // MSI Afterburner
+      "DiscordHook64.dll",    // Discord overlay
+      "discord_hook.dll",     // Discord overlay (legacy)
   };
 
-  for (HMODULE mod : overlay_modules) {
-    if (mod != nullptr) {
-      char mod_name[MAX_PATH] = {0};
-      GetModuleFileNameA(mod, mod_name, sizeof(mod_name));
+  bool found_overlay = false;
+  for (const char* dll_name : known_overlays) {
+    HMODULE hMod = GetModuleHandleA(dll_name);
+    if (hMod != nullptr) {
+      found_overlay = true;
+
+      char mod_path[MAX_PATH] = {0};
+      GetModuleFileNameA(hMod, mod_path, sizeof(mod_path));
 
       MODULEINFO mod_info = {};
-      if (GetModuleInformation(GetCurrentProcess(), mod, &mod_info, sizeof(mod_info))) {
+      if (GetModuleInformation(GetCurrentProcess(), hMod, &mod_info, sizeof(mod_info))) {
         uintptr_t base = reinterpret_cast<uintptr_t>(mod_info.lpBaseOfDll);
         size_t size = mod_info.SizeOfImage;
 
-        REXSYS_WARN("Detected overlay DLL: {} (base: 0x{:016X}, size: 0x{:08X})", 
-                    mod_name, base, size);
+        REXSYS_WARN("Overlay detected: {} at 0x{:016X} (size: 0x{:08X})", 
+                    dll_name, base, size);
 
-        // Check if it conflicts with our preferred physical memory range (0x180000000+)
-        if (base >= 0x180000000ull && base < 0x280000000ull) {
-          REXSYS_WARN("  WARNING: This DLL occupies address space that may conflict with Xbox 360 memory mapping!");
-          REXSYS_WARN("  If the game crashes, try closing RivaTuner/MSI Afterburner/Discord overlay.");
+        // Check if overlay conflicts with Xbox 360 physical memory range (0x100000000+)
+        if (base >= 0x100000000ull && base < 0x200000000ull) {
+          REXSYS_ERROR("CRITICAL: {} is blocking memory addresses needed for Xbox 360 emulation!", dll_name);
+          REXSYS_ERROR("The game will likely crash. Please close RivaTuner/MSI Afterburner and restart.");
         }
       }
     }
+  }
+
+  if (found_overlay) {
+    REXSYS_WARN("Overlay software detected. If the game crashes, close overlay programs and restart.");
   }
 #endif
 
@@ -197,49 +191,16 @@ bool Memory::Initialize() {
 
   // Attempt to create our views. This may fail at the first address
   // we pick, so try a few times.
-  // 
-  // Known problematic addresses to avoid (overlay injectors like RTSS/MSI Afterburner):
-  // - 0x180000000 (RTSS default base, conflicts with physical mirror at base+0x100000000)
-  // - 0x140000000 (some Discord overlay variants)
-  // - 0x7FF000000000+ (Windows reserves high addresses for system use)
-  //
-  // Strategy: Try powers of 2 from 2^32 to 2^40, skipping known conflicts.
   mapping_base_ = 0;
-  for (size_t n = 32; n < 41; n++) {
+  for (size_t n = 32; n < 64; n++) {
     auto mapping_base = reinterpret_cast<uint8_t*>(1ull << n);
-
-    // Skip addresses known to conflict with overlay injectors
-    if (n == 33) {  // 0x180000000 - RTSS/MSI Afterburner hook DLL base
-      REXSYS_INFO("Skipping memory base 0x{:016X} (known RTSS/overlay conflict)", 
-                  reinterpret_cast<uintptr_t>(mapping_base));
-      continue;
-    }
-    if (n == 32 && (1ull << 32) + 0x40000000 == 0x140000000) {  // 0x140000000 - Discord overlay
-      REXSYS_INFO("Skipping memory base 0x{:016X} (known Discord overlay conflict)", 
-                  reinterpret_cast<uintptr_t>(mapping_base));
-      continue;
-    }
-
-    REXSYS_INFO("Attempting to map Xbox 360 memory at base 0x{:016X}...", 
-                reinterpret_cast<uintptr_t>(mapping_base));
     if (!MapViews(mapping_base)) {
       mapping_base_ = mapping_base;
-      REXSYS_INFO("Successfully mapped Xbox 360 memory at base 0x{:016X}", 
-                  reinterpret_cast<uintptr_t>(mapping_base_));
-      REXSYS_INFO("  Virtual memory base:  0x{:016X}", 
-                  reinterpret_cast<uintptr_t>(mapping_base_));
-      REXSYS_INFO("  Physical memory base: 0x{:016X}", 
-                  reinterpret_cast<uintptr_t>(mapping_base_) + 0x100000000ull);
       break;
-    } else {
-      REXSYS_WARN("Failed to map at 0x{:016X}, trying next address...", 
-                  reinterpret_cast<uintptr_t>(mapping_base));
     }
   }
   if (!mapping_base_) {
     REXSYS_ERROR("Unable to find a continuous block in the 64bit address space.");
-    REXSYS_ERROR("This may be caused by overlay software (RivaTuner, MSI Afterburner, Discord, etc.)");
-    REXSYS_ERROR("Try closing these programs and restarting the game.");
     assert_always();
     return false;
   }

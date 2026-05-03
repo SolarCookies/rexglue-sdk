@@ -35,7 +35,6 @@ if(WIN32)
         exception_handler_win.cpp
         filesystem_win.cpp
         fiber_win32.cpp
-        injection_guard_win.cpp
         mapped_memory_win.cpp
         math_msvc.cpp
         memory_win.cpp
@@ -76,10 +75,6 @@ target_include_directories(rexcore PRIVATE
 
 if(UNIX)
     target_link_libraries(rexcore PRIVATE pthread rt dl)
-endif()
-
-if(WIN32)
-    target_link_libraries(rexcore PRIVATE psapi)
 endif()
 
 target_link_libraries(rexcore
