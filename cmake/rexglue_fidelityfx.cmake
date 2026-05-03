@@ -128,11 +128,11 @@ endif()
 
 # ── Build FidelityFX ─────────────────────────────────────────────────────
 set(FFX_API_ENABLE_FRAMEGEN_PROVIDER OFF CACHE BOOL "" FORCE)
-if(WIN32)
-    set(FFX_API_AUTO_COMPILE_SHADERS ON CACHE BOOL "" FORCE)
-else()
-    set(FFX_API_AUTO_COMPILE_SHADERS OFF CACHE BOOL "" FORCE)
-endif()
+# Disable upstream auto shader compilation. On Windows the FXC permutation
+# build for FSR3 hangs indefinitely under CI (observed >50 min with no
+# progress on GitHub Actions). The libs link without prebaked shaders;
+# anything that needs them can be compiled separately.
+set(FFX_API_AUTO_COMPILE_SHADERS OFF CACHE BOOL "" FORCE)
 add_subdirectory("${fidelityfx_SOURCE_DIR}/ffx-api" "${fidelityfx_BINARY_DIR}/ffx-api" EXCLUDE_FROM_ALL)
 
 # The upstream FidelityFX targets expose source-tree include paths in
