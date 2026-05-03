@@ -37,6 +37,7 @@ class MnkInputDriver final : public InputDriver,
                         X_INPUT_KEYSTROKE* out_keystroke) override;
 
   void OnWindowAvailable(rex::ui::Window* window) override;
+  void OnInputModeChanged(InputMode mode, bool show_mouse_cursor) override;
 
   // WindowInputListener
   void OnKeyDown(rex::ui::KeyEvent& e) override;
@@ -55,6 +56,7 @@ class MnkInputDriver final : public InputDriver,
   bool IsEnabled() const;
   void CenterCursor();
   void UpdateMouseCapture();
+  void ResetInputState();
   void SetKeyState(uint16_t vk, bool down);
   void EnqueueKeystroke(uint16_t vk_pad, bool down);
 
@@ -70,6 +72,8 @@ class MnkInputDriver final : public InputDriver,
   int32_t prev_mouse_y_ = 0;
   bool mouse_captured_ = false;
   bool has_focus_ = true;
+  InputMode input_mode_ = InputMode::kGame;
+  bool show_mouse_cursor_ = false;
 
   // Keystroke queue
   std::queue<X_INPUT_KEYSTROKE> keystroke_queue_;

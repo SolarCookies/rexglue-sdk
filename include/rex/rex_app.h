@@ -203,6 +203,8 @@ class ReXApp : public ui::WindowedApp, public ui::WindowListener, public ui::Win
   // WindowInputListener overrides
   void OnKeyDown(ui::KeyEvent& e) override;
 
+  void UpdateBuiltinOverlayInputMode();
+
   PPCImageInfo ppc_info_;
   PathConfig resolved_defaults_;
   RuntimeConfig config_;

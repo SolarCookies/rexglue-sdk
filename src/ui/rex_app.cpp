@@ -289,6 +289,7 @@ bool ReXApp::SetupPresentation() {
           } else {
             console_overlay_ = std::make_unique<ui::ConsoleDialog>(imgui_drawer_.get(), log_sink_);
           }
+          UpdateBuiltinOverlayInputMode();
         });
         rex::ui::RegisterBind("bind_settings", "F4", "Toggle settings overlay", [this] {
           if (settings_overlay_) {
@@ -297,9 +298,25 @@ bool ReXApp::SetupPresentation() {
             settings_overlay_ =
                 std::make_unique<ui::SettingsDialog>(imgui_drawer_.get(), config_path_);
           }
+          UpdateBuiltinOverlayInputMode();
         });
 
         OnCreateDialogs(imgui_drawer_.get());
+
+        runtime_->set_imgui_drawer(imgui_drawer_.get());
+
+        // Tell input drivers to suppress input while interactive host overlays
+        // are open. This also lets MnK release capture and reveal the cursor.
+        auto* input_sys = static_cast<rex::input::InputSystem*>(runtime_->input_system());
+        if (input_sys) {
+          input_sys->SetActiveCallback([this]() {
+            if (console_overlay_ || settings_overlay_)
+              return false;
+            if (debug_overlay_)
+              return !ImGui::GetIO().WantCaptureMouse;
+            return true;
+          });
+        }
       }
     }
     window_->SetPresenter(presenter);
@@ -353,6 +370,19 @@ std::function<void(PathConfig)> ReXApp::MakeResumeCallback() {
     }
     LaunchModule();
   };
+}
+
+void ReXApp::UpdateBuiltinOverlayInputMode() {
+  auto* input_sys = runtime_ ? static_cast<rex::input::InputSystem*>(runtime_->input_system())
+                             : nullptr;
+  if (!input_sys) {
+    return;
+  }
+
+  bool ui_mode = console_overlay_ || settings_overlay_;
+  input_sys->SetInputMode(ui_mode ? rex::input::InputMode::kUIOnly
+                                  : rex::input::InputMode::kGame);
+  input_sys->SetShowMouseCursor(ui_mode);
 }
 
 void ReXApp::OnKeyDown(ui::KeyEvent& e) {
