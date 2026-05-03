@@ -230,6 +230,7 @@ bool ReXApp::OnInitialize() {
           } else {
             console_overlay_ = std::make_unique<ui::ConsoleDialog>(imgui_drawer_.get(), log_sink_);
           }
+          UpdateBuiltinOverlayInputMode();
         });
         rex::ui::RegisterBind("bind_settings", "F4", "Toggle settings overlay", [this] {
           if (settings_overlay_) {
@@ -238,6 +239,7 @@ bool ReXApp::OnInitialize() {
             settings_overlay_ =
                 std::make_unique<ui::SettingsDialog>(imgui_drawer_.get(), config_path_);
           }
+          UpdateBuiltinOverlayInputMode();
         });
 
         // Allow subclass to add custom dialogs
@@ -245,14 +247,16 @@ bool ReXApp::OnInitialize() {
 
         runtime_->set_imgui_drawer(imgui_drawer_.get());
 
-        // Tell input drivers to suppress input when ImGui wants the mouse
-        // (e.g. overlay is open). This controls MnK mouse capture.
+        // Tell input drivers to suppress input while interactive host overlays
+        // are open. This also lets MnK release capture and reveal the cursor.
         auto* input_sys = static_cast<rex::input::InputSystem*>(runtime_->input_system());
         if (input_sys) {
           input_sys->SetActiveCallback([this]() {
-            if (!debug_overlay_ && !console_overlay_ && !settings_overlay_)
-              return true;
-            return !ImGui::GetIO().WantCaptureMouse;
+            if (console_overlay_ || settings_overlay_)
+              return false;
+            if (debug_overlay_)
+              return !ImGui::GetIO().WantCaptureMouse;
+            return true;
           });
         }
       }
@@ -285,6 +289,19 @@ bool ReXApp::OnInitialize() {
   });
 
   return true;
+}
+
+void ReXApp::UpdateBuiltinOverlayInputMode() {
+  auto* input_sys = runtime_ ? static_cast<rex::input::InputSystem*>(runtime_->input_system())
+                             : nullptr;
+  if (!input_sys) {
+    return;
+  }
+
+  bool ui_mode = console_overlay_ || settings_overlay_;
+  input_sys->SetInputMode(ui_mode ? rex::input::InputMode::kUIOnly
+                                  : rex::input::InputMode::kGame);
+  input_sys->SetShowMouseCursor(ui_mode);
 }
 
 void ReXApp::OnKeyDown(ui::KeyEvent& e) {

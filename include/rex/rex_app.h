@@ -141,6 +141,8 @@ class ReXApp : public ui::WindowedApp, public ui::WindowListener, public ui::Win
   // WindowInputListener overrides
   void OnKeyDown(ui::KeyEvent& e) override;
 
+  void UpdateBuiltinOverlayInputMode();
+
   PPCImageInfo ppc_info_;
   std::filesystem::path game_data_root_;
   std::filesystem::path user_data_root_;

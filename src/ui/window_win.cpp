@@ -970,12 +970,15 @@ bool Win32Window::HandleKeyboard(UINT message, WPARAM wParam, LPARAM lParam,
              !!(GetKeyState(VK_MENU) & 0x80), !!(GetKeyState(VK_LWIN) & 0x80));
   switch (message) {
     case WM_KEYDOWN:
+    case WM_SYSKEYDOWN:
       OnKeyDown(e, destruction_receiver);
       break;
     case WM_KEYUP:
+    case WM_SYSKEYUP:
       OnKeyUp(e, destruction_receiver);
       break;
     case WM_CHAR:
+    case WM_SYSCHAR:
       OnKeyChar(e, destruction_receiver);
       break;
     default:
@@ -983,7 +986,8 @@ bool Win32Window::HandleKeyboard(UINT message, WPARAM wParam, LPARAM lParam,
   }
   // Returning immediately anyway - no need to check
   // destruction_receiver.IsWindowDestroyed().
-  return e.is_handled();
+  return e.is_handled() ||
+         ((message == WM_SYSKEYDOWN || message == WM_SYSKEYUP) && wParam == VK_MENU);
 }
 
 void Win32Window::SetCursorIfFocusedOnClientArea(HCURSOR cursor) const {

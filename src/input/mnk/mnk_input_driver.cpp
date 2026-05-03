@@ -94,6 +94,18 @@ void MnkInputDriver::OnWindowAvailable(rex::ui::Window* window) {
   }
 }
 
+void MnkInputDriver::OnInputModeChanged(InputMode mode, bool show_mouse_cursor) {
+  {
+    std::lock_guard lock(state_mutex_);
+    input_mode_ = mode;
+    show_mouse_cursor_ = show_mouse_cursor;
+    if (mode != InputMode::kGame) {
+      ResetInputState();
+    }
+  }
+  UpdateMouseCapture();
+}
+
 void MnkInputDriver::OnClosing(rex::ui::UIEvent&) {
   if (attached_window_) {
     if (mouse_captured_) {
@@ -154,6 +166,8 @@ X_RESULT MnkInputDriver::GetState(uint32_t user_index, X_INPUT_STATE* out_state)
   UpdateMouseCapture();
 
   if (!is_active() || !has_focus_) {
+    std::lock_guard lock(state_mutex_);
+    ResetInputState();
     if (out_state) {
       std::memset(out_state, 0, sizeof(*out_state));
       out_state->packet_number = packet_number_;
@@ -257,6 +271,10 @@ X_RESULT MnkInputDriver::GetKeystroke(uint32_t user_index, uint32_t flags,
     return X_ERROR_DEVICE_NOT_CONNECTED;
   }
   std::lock_guard lock(state_mutex_);
+  if (!is_active() || !has_focus_) {
+    ResetInputState();
+    return X_ERROR_EMPTY;
+  }
   // Also tick from here so titles that only poll keystrokes (without ever calling
   // XamInputGetState) still see XINPUT_KEYSTROKE_REPEAT.
   TickRepeats();
@@ -459,7 +477,8 @@ void MnkInputDriver::UpdateMouseCapture() {
   if (!attached_window_)
     return;
 
-  bool should_capture = IsEnabled() && has_focus_ && is_active();
+  bool active = is_active();
+  bool should_capture = IsEnabled() && has_focus_ && active && !show_mouse_cursor_;
 
   if (should_capture && !mouse_captured_) {
     mouse_captured_ = true;
@@ -470,13 +489,30 @@ void MnkInputDriver::UpdateMouseCapture() {
     mouse_dy_ = 0;
   } else if (!should_capture && mouse_captured_) {
     mouse_captured_ = false;
-    attached_window_->SetCursorVisibility(rex::ui::Window::CursorVisibility::kVisible);
     attached_window_->ReleaseMouse();
+  }
+
+  if (should_capture) {
+    attached_window_->SetCursorVisibility(rex::ui::Window::CursorVisibility::kHidden);
+  } else if (show_mouse_cursor_ || input_mode_ == InputMode::kGame || !active) {
+    attached_window_->SetCursorVisibility(rex::ui::Window::CursorVisibility::kVisible);
   }
 
   // Re-center cursor each frame while captured to prevent edge clamping
   if (mouse_captured_) {
     CenterCursor();
+  }
+}
+
+void MnkInputDriver::ResetInputState() {
+  std::memset(key_down_, 0, sizeof(key_down_));
+  mouse_dx_ = 0;
+  mouse_dy_ = 0;
+  std::queue<X_INPUT_KEYSTROKE> empty;
+  std::swap(keystroke_queue_, empty);
+  for (auto& s : pad_states_) {
+    s.held = false;
+    s.vk_pad = static_cast<uint16_t>(VirtualKey::kNone);
   }
 }
 
@@ -487,7 +523,7 @@ void MnkInputDriver::SetKeyState(uint16_t vk, bool down) {
 }
 
 void MnkInputDriver::OnKeyDown(rex::ui::KeyEvent& e) {
-  if (!IsEnabled() || !has_focus_)
+  if (!IsEnabled() || !has_focus_ || !is_active())
     return;
   std::lock_guard lock(state_mutex_);
   VirtualKey vk = e.virtual_key();
@@ -506,19 +542,20 @@ void MnkInputDriver::OnKeyDown(rex::ui::KeyEvent& e) {
 void MnkInputDriver::OnKeyUp(rex::ui::KeyEvent& e) {
   if (!IsEnabled())
     return;
+  bool can_emit = has_focus_ && is_active();
   std::lock_guard lock(state_mutex_);
   VirtualKey vk = e.virtual_key();
   uint16_t idx = static_cast<uint16_t>(vk);
   bool was_down = (idx < 256) && key_down_[idx];
   SetKeyState(idx, false);
-  if (was_down) {
+  if (was_down && can_emit) {
     EmitButtonChange(vk, false);
     RecomputeLstickDir();
   }
 }
 
 void MnkInputDriver::OnMouseDown(rex::ui::MouseEvent& e) {
-  if (!IsEnabled() || !has_focus_)
+  if (!IsEnabled() || !has_focus_ || !is_active())
     return;
   std::lock_guard lock(state_mutex_);
   VirtualKey vk = VirtualKey::kNone;
@@ -547,6 +584,7 @@ void MnkInputDriver::OnMouseDown(rex::ui::MouseEvent& e) {
 void MnkInputDriver::OnMouseUp(rex::ui::MouseEvent& e) {
   if (!IsEnabled())
     return;
+  bool can_emit = has_focus_ && is_active();
   std::lock_guard lock(state_mutex_);
   VirtualKey vk = VirtualKey::kNone;
   switch (e.button()) {
@@ -565,14 +603,14 @@ void MnkInputDriver::OnMouseUp(rex::ui::MouseEvent& e) {
   uint16_t idx = static_cast<uint16_t>(vk);
   bool was_down = (idx < 256) && key_down_[idx];
   SetKeyState(idx, false);
-  if (was_down) {
+  if (was_down && can_emit) {
     EmitButtonChange(vk, false);
     RecomputeLstickDir();
   }
 }
 
 void MnkInputDriver::OnMouseMove(rex::ui::MouseEvent& e) {
-  if (!IsEnabled() || !has_focus_)
+  if (!IsEnabled() || !has_focus_ || !is_active())
     return;
   std::lock_guard lock(state_mutex_);
   int32_t x = e.x();
@@ -586,19 +624,7 @@ void MnkInputDriver::OnMouseMove(rex::ui::MouseEvent& e) {
 void MnkInputDriver::OnLostFocus(rex::ui::UISetupEvent&) {
   std::lock_guard lock(state_mutex_);
   has_focus_ = false;
-  std::memset(key_down_, 0, sizeof(key_down_));
-  mouse_dx_ = 0;
-  mouse_dy_ = 0;
-  // Drop any keystrokes queued before focus loss; otherwise they would be
-  // delivered when the title regains focus, out of order with current input.
-  std::queue<X_INPUT_KEYSTROKE> empty;
-  std::swap(keystroke_queue_, empty);
-  // Clear per-pad hold state so resumed focus does not generate stale REPEAT
-  // events for keys that were held when focus was lost.
-  for (auto& s : pad_states_) {
-    s.held = false;
-    s.vk_pad = static_cast<uint16_t>(VirtualKey::kNone);
-  }
+  ResetInputState();
   if (mouse_captured_ && attached_window_) {
     mouse_captured_ = false;
     attached_window_->SetCursorVisibility(rex::ui::Window::CursorVisibility::kVisible);

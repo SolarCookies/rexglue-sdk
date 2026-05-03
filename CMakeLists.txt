@@ -191,6 +191,13 @@ add_compile_options(
     -Wextra
 )
 
+# ReXGlue core uses x86 SIMD intrinsics such as _mm_shuffle_epi8. Standalone
+# SDK presets provide this via -march=x86-64-v3, but embedded builds inherit
+# the game's presets instead, so set the SDK baseline explicitly.
+if(NOT MSVC AND CMAKE_SYSTEM_PROCESSOR MATCHES "AMD64|x86_64")
+    add_compile_options(-msse4.1)
+endif()
+
 include_directories(${REXGLUE_ROOT}/include)
 
 add_subdirectory(src/core)
