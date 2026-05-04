@@ -334,7 +334,8 @@ bool ReXApp::OnInitialize() {
             shader_debugger_overlay_ = std::make_unique<ui::ShaderDebuggerDialog>(
                 imgui_drawer_.get(), std::move(snapshot_provider), std::move(disable_setter),
                 std::move(details_provider), std::move(binary_replacer),
-                std::move(profiling_toggle), std::move(profiling_resetter));
+                std::move(profiling_toggle), std::move(profiling_resetter),
+                std::filesystem::path("shaders.toml"));
           }
           UpdateBuiltinOverlayInputMode();
         });

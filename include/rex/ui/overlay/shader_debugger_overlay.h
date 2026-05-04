@@ -13,8 +13,10 @@
  */
 #pragma once
 #include <cstdint>
+#include <filesystem>
 #include <functional>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include <rex/ui/imgui_dialog.h>
@@ -71,7 +73,8 @@ class ShaderDebuggerDialog : public ImGuiDialog {
   ShaderDebuggerDialog(ImGuiDrawer* imgui_drawer, SnapshotProvider snapshot_provider,
                        DisableSetter disable_setter, DetailsProvider details_provider,
                        BinaryReplacer binary_replacer, ProfilingToggle profiling_toggle,
-                       ProfilingResetter profiling_resetter);
+                       ProfilingResetter profiling_resetter,
+                       std::filesystem::path names_toml_path = {});
   ~ShaderDebuggerDialog();
 
  protected:
@@ -81,6 +84,12 @@ class ShaderDebuggerDialog : public ImGuiDialog {
   void DrawShaderTable();
   void DrawDetailsPanel();
   void RefreshSelectedDetails();
+  // Returns the user-assigned name for a hash, or empty string if unset.
+  std::string LookupName(uint64_t hash) const;
+  // Sets/clears a name and persists shaders.toml. Empty name removes entry.
+  void SetName(uint64_t hash, std::string name);
+  void LoadNamesFromDisk();
+  void SaveNamesToDisk() const;
 
   SnapshotProvider snapshot_provider_;
   DisableSetter disable_setter_;
@@ -107,6 +116,13 @@ class ShaderDebuggerDialog : public ImGuiDialog {
   // User-supplied path used for "Save binary..." / "Load binary..." buttons.
   char binary_path_buf_[512] = {};
   std::string status_message_;
+
+  // Persistent per-hash documentation names. Loaded from / saved to
+  // names_toml_path_ if non-empty.
+  std::filesystem::path names_toml_path_;
+  std::unordered_map<uint64_t, std::string> shader_names_;
+  // Edit buffer for the rename input in the details panel.
+  char rename_buf_[128] = {};
 };
 
 }  // namespace rex::ui

@@ -71,21 +71,166 @@ ShaderDebuggerDialog::ShaderDebuggerDialog(ImGuiDrawer* imgui_drawer,
                                            DetailsProvider details_provider,
                                            BinaryReplacer binary_replacer,
                                            ProfilingToggle profiling_toggle,
-                                           ProfilingResetter profiling_resetter)
+                                           ProfilingResetter profiling_resetter,
+                                           std::filesystem::path names_toml_path)
     : ImGuiDialog(imgui_drawer),
       snapshot_provider_(std::move(snapshot_provider)),
       disable_setter_(std::move(disable_setter)),
       details_provider_(std::move(details_provider)),
       binary_replacer_(std::move(binary_replacer)),
       profiling_toggle_(std::move(profiling_toggle)),
-      profiling_resetter_(std::move(profiling_resetter)) {
+      profiling_resetter_(std::move(profiling_resetter)),
+      names_toml_path_(std::move(names_toml_path)) {
   // Turn on per-shader timing for the lifetime of the dialog.
   if (profiling_toggle_) profiling_toggle_(true);
   if (profiling_resetter_) profiling_resetter_();
+  LoadNamesFromDisk();
 }
 
 ShaderDebuggerDialog::~ShaderDebuggerDialog() {
   if (profiling_toggle_) profiling_toggle_(false);
+}
+
+std::string ShaderDebuggerDialog::LookupName(uint64_t hash) const {
+  auto it = shader_names_.find(hash);
+  return it == shader_names_.end() ? std::string{} : it->second;
+}
+
+void ShaderDebuggerDialog::SetName(uint64_t hash, std::string name) {
+  // Trim trailing whitespace; treat empty as a removal so we don't write
+  // pointless entries to the toml.
+  while (!name.empty() && (name.back() == ' ' || name.back() == '\t' ||
+                           name.back() == '\r' || name.back() == '\n')) {
+    name.pop_back();
+  }
+  if (name.empty()) {
+    shader_names_.erase(hash);
+  } else {
+    shader_names_[hash] = std::move(name);
+  }
+  SaveNamesToDisk();
+}
+
+namespace {
+
+// Minimal hand-rolled escape for TOML basic-string values. Names are short
+// human-typed labels, so a comprehensive parser isn't needed.
+std::string EscapeTomlString(const std::string& in) {
+  std::string out;
+  out.reserve(in.size() + 2);
+  for (char c : in) {
+    switch (c) {
+      case '\\': out += "\\\\"; break;
+      case '"':  out += "\\\""; break;
+      case '\n': out += "\\n";  break;
+      case '\r': out += "\\r";  break;
+      case '\t': out += "\\t";  break;
+      default:
+        if (static_cast<unsigned char>(c) < 0x20) {
+          char buf[8];
+          std::snprintf(buf, sizeof(buf), "\\u%04x", static_cast<unsigned int>(c));
+          out += buf;
+        } else {
+          out += c;
+        }
+        break;
+    }
+  }
+  return out;
+}
+
+// Inverse: handle the small subset of escapes EscapeTomlString produces.
+std::string UnescapeTomlString(const std::string& in) {
+  std::string out;
+  out.reserve(in.size());
+  for (size_t i = 0; i < in.size(); ++i) {
+    char c = in[i];
+    if (c == '\\' && i + 1 < in.size()) {
+      char n = in[++i];
+      switch (n) {
+        case '\\': out += '\\'; break;
+        case '"':  out += '"';  break;
+        case 'n':  out += '\n'; break;
+        case 'r':  out += '\r'; break;
+        case 't':  out += '\t'; break;
+        case 'u':
+          if (i + 4 < in.size()) {
+            unsigned int code = 0;
+            std::sscanf(in.c_str() + i + 1, "%4x", &code);
+            if (code < 0x80) {
+              out += static_cast<char>(code);
+            }
+            i += 4;
+          }
+          break;
+        default: out += n; break;
+      }
+    } else {
+      out += c;
+    }
+  }
+  return out;
+}
+
+}  // namespace
+
+void ShaderDebuggerDialog::LoadNamesFromDisk() {
+  shader_names_.clear();
+  if (names_toml_path_.empty()) return;
+  std::ifstream in(names_toml_path_);
+  if (!in) return;
+  std::string line;
+  while (std::getline(in, line)) {
+    // Strip leading whitespace and skip blanks/comments.
+    size_t start = line.find_first_not_of(" \t");
+    if (start == std::string::npos) continue;
+    if (line[start] == '#') continue;
+    // Find '=' separator.
+    size_t eq = line.find('=', start);
+    if (eq == std::string::npos) continue;
+    // Key: bare hex hash, optionally quoted.
+    std::string key = line.substr(start, eq - start);
+    while (!key.empty() && (key.back() == ' ' || key.back() == '\t')) key.pop_back();
+    if (!key.empty() && key.front() == '"' && key.back() == '"' && key.size() >= 2) {
+      key = key.substr(1, key.size() - 2);
+    }
+    // Value: quoted string.
+    size_t vstart = line.find_first_not_of(" \t", eq + 1);
+    if (vstart == std::string::npos) continue;
+    if (line[vstart] != '"') continue;
+    size_t vend = line.find_last_of('"');
+    if (vend <= vstart) continue;
+    std::string value = UnescapeTomlString(line.substr(vstart + 1, vend - vstart - 1));
+    if (key.empty() || value.empty()) continue;
+    uint64_t hash = 0;
+    if (std::sscanf(key.c_str(), "%llx", reinterpret_cast<unsigned long long*>(&hash)) == 1) {
+      shader_names_[hash] = std::move(value);
+    }
+  }
+}
+
+void ShaderDebuggerDialog::SaveNamesToDisk() const {
+  if (names_toml_path_.empty()) return;
+  // Make sure the parent directory exists.
+  std::error_code ec;
+  if (names_toml_path_.has_parent_path()) {
+    std::filesystem::create_directories(names_toml_path_.parent_path(), ec);
+  }
+  std::ofstream out(names_toml_path_, std::ios::trunc);
+  if (!out) return;
+  out << "# Per-shader documentation names. One entry per renamed shader.\n";
+  out << "# Format: \"<ucode_hash_hex>\" = \"<name>\"\n";
+  // Sort by hash for stable diffs.
+  std::vector<std::pair<uint64_t, std::string>> ordered(shader_names_.begin(),
+                                                        shader_names_.end());
+  std::sort(ordered.begin(), ordered.end(),
+            [](const auto& a, const auto& b) { return a.first < b.first; });
+  for (const auto& kv : ordered) {
+    char hash_buf[24];
+    std::snprintf(hash_buf, sizeof(hash_buf), "%016llx",
+                  static_cast<unsigned long long>(kv.first));
+    out << '"' << hash_buf << "\" = \"" << EscapeTomlString(kv.second) << "\"\n";
+  }
 }
 
 void ShaderDebuggerDialog::RefreshSelectedDetails() {
@@ -230,7 +375,7 @@ void ShaderDebuggerDialog::DrawShaderTable() {
 
   ImGui::Separator();
 
-  if (ImGui::BeginTable("##shaders", 8,
+  if (ImGui::BeginTable("##shaders", 9,
                         ImGuiTableFlags_RowBg | ImGuiTableFlags_Borders |
                             ImGuiTableFlags_ScrollY | ImGuiTableFlags_Sortable |
                             ImGuiTableFlags_Resizable)) {
@@ -238,6 +383,7 @@ void ShaderDebuggerDialog::DrawShaderTable() {
     ImGui::TableSetupColumn("Enabled", ImGuiTableColumnFlags_NoSort, 70.0f);
     ImGui::TableSetupColumn("Type", ImGuiTableColumnFlags_DefaultSort, 50.0f);
     ImGui::TableSetupColumn("Hash", ImGuiTableColumnFlags_None, 170.0f);
+    ImGui::TableSetupColumn("Name", ImGuiTableColumnFlags_None, 140.0f);
     ImGui::TableSetupColumn("Dwords", ImGuiTableColumnFlags_None, 70.0f);
     ImGui::TableSetupColumn("Active", ImGuiTableColumnFlags_None, 50.0f);
     ImGui::TableSetupColumn("Total ms", ImGuiTableColumnFlags_None, 80.0f);
@@ -271,25 +417,31 @@ void ShaderDebuggerDialog::DrawShaderTable() {
               cmp = (ea.ucode_hash < eb.ucode_hash) ? -1
                                                     : (ea.ucode_hash > eb.ucode_hash ? 1 : 0);
               break;
-            case 3:
+            case 3: {
+              const std::string& na = LookupName(ea.ucode_hash);
+              const std::string& nb = LookupName(eb.ucode_hash);
+              cmp = na.compare(nb);
+              break;
+            }
+            case 4:
               cmp = (ea.dword_count < eb.dword_count)
                         ? -1
                         : (ea.dword_count > eb.dword_count ? 1 : 0);
               break;
-            case 4:
+            case 5:
               cmp = (ea.active ? 1 : 0) - (eb.active ? 1 : 0);
               break;
-            case 5:
+            case 6:
               cmp = (ea.profile_total_ns < eb.profile_total_ns)
                         ? -1
                         : (ea.profile_total_ns > eb.profile_total_ns ? 1 : 0);
               break;
-            case 6:
+            case 7:
               cmp = (ea.profile_draw_count < eb.profile_draw_count)
                         ? -1
                         : (ea.profile_draw_count > eb.profile_draw_count ? 1 : 0);
               break;
-            case 7: {
+            case 8: {
               uint64_t avg_a =
                   ea.profile_draw_count ? ea.profile_total_ns / ea.profile_draw_count : 0;
               uint64_t avg_b =
@@ -340,24 +492,36 @@ void ShaderDebuggerDialog::DrawShaderTable() {
           selected_hash_ = entry.ucode_hash;
           selected_translation_idx_ = 0;
           status_message_.clear();
+          // Seed the rename buffer with the current name (if any).
+          const std::string& nm = LookupName(entry.ucode_hash);
+          std::memset(rename_buf_, 0, sizeof(rename_buf_));
+          std::strncpy(rename_buf_, nm.c_str(), sizeof(rename_buf_) - 1);
           RefreshSelectedDetails();
         }
 
         ImGui::TableSetColumnIndex(3);
-        ImGui::Text("%u", entry.dword_count);
+        const std::string& name = LookupName(entry.ucode_hash);
+        if (!name.empty()) {
+          ImGui::TextUnformatted(name.c_str());
+        } else {
+          ImGui::TextDisabled("-");
+        }
 
         ImGui::TableSetColumnIndex(4);
+        ImGui::Text("%u", entry.dword_count);
+
+        ImGui::TableSetColumnIndex(5);
         if (entry.active) {
           ImGui::TextColored(ImVec4(1.0f, 0.85f, 0.3f, 1.0f), "*");
         }
 
-        ImGui::TableSetColumnIndex(5);
+        ImGui::TableSetColumnIndex(6);
         ImGui::Text("%.3f", entry.profile_total_ns / 1'000'000.0);
 
-        ImGui::TableSetColumnIndex(6);
+        ImGui::TableSetColumnIndex(7);
         ImGui::Text("%llu", static_cast<unsigned long long>(entry.profile_draw_count));
 
-        ImGui::TableSetColumnIndex(7);
+        ImGui::TableSetColumnIndex(8);
         if (entry.profile_draw_count) {
           ImGui::Text("%.2f",
                       (entry.profile_total_ns / 1'000.0) /
@@ -395,6 +559,24 @@ void ShaderDebuggerDialog::DrawDetailsPanel() {
   }
   ImGui::Text("Dwords: %u   Translations: %zu   Disabled: %s", info.dword_count,
               selected_details_.translations.size(), info.disabled ? "yes" : "no");
+
+  // Rename / documentation label. Hitting Enter or pressing the Save button
+  // writes the new name into shader_names_ and persists shaders.toml.
+  ImGui::SetNextItemWidth(260.0f);
+  bool committed = ImGui::InputTextWithHint("##rename", "Documentation name",
+                                            rename_buf_, sizeof(rename_buf_),
+                                            ImGuiInputTextFlags_EnterReturnsTrue);
+  ImGui::SameLine();
+  if (ImGui::Button("Save name") || committed) {
+    SetName(selected_hash_, std::string(rename_buf_));
+    status_message_ = rename_buf_[0] ? "Saved name." : "Cleared name.";
+  }
+  ImGui::SameLine();
+  if (ImGui::Button("Clear name")) {
+    rename_buf_[0] = '\0';
+    SetName(selected_hash_, std::string{});
+    status_message_ = "Cleared name.";
+  }
 
   if (ImGui::Button("Refresh details")) {
     RefreshSelectedDetails();
