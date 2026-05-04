@@ -984,6 +984,25 @@ class Shader {
   bool disabled() const { return disabled_.load(std::memory_order_relaxed); }
   void set_disabled(bool value) { disabled_.store(value, std::memory_order_relaxed); }
 
+  // Per-shader profiling accessors. The accumulator is in nanoseconds of CPU
+  // time spent inside IssueDraw while this shader was bound, summed across
+  // every draw since the last reset. Cheap to read; only updated when shader
+  // profiling is enabled on the command processor.
+  uint64_t profile_total_ns() const {
+    return profile_total_ns_.load(std::memory_order_relaxed);
+  }
+  uint64_t profile_draw_count() const {
+    return profile_draw_count_.load(std::memory_order_relaxed);
+  }
+  void profile_add_sample(uint64_t ns) {
+    profile_total_ns_.fetch_add(ns, std::memory_order_relaxed);
+    profile_draw_count_.fetch_add(1, std::memory_order_relaxed);
+  }
+  void profile_reset() {
+    profile_total_ns_.store(0, std::memory_order_relaxed);
+    profile_draw_count_.store(0, std::memory_order_relaxed);
+  }
+
   // Dumps the shader's microcode binary and, if analyzed, disassembly, to files
   // in the given directory based on ucode hash. Returns the name of the written
   // file. Can be called at any time, doesn't require the shader to be
@@ -1050,6 +1069,13 @@ class Shader {
 
   // Runtime debug toggle -- when true, draws using this shader are skipped.
   std::atomic<bool> disabled_{false};
+
+  // Lightweight per-shader profiling counters. Only updated by the command
+  // processor while CommandProcessor::IsShaderProfilingEnabled() is true (the
+  // shader debugger toggles this when its window is open) so the cost is
+  // zero in the common case.
+  std::atomic<uint64_t> profile_total_ns_{0};
+  std::atomic<uint64_t> profile_draw_count_{0};
 
  private:
   void GatherExecInformation(const ParsedExecInstruction& instr,

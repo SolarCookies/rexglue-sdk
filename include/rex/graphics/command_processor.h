@@ -13,6 +13,7 @@
 
 #include <atomic>
 #include <cstring>
+#include <atomic>
 #include <functional>
 #include <memory>
 #include <mutex>
@@ -101,6 +102,12 @@ class CommandProcessor {
     uint32_t dword_count = 0;
     bool disabled = false;
     bool active = false;
+    // Per-shader profiling data. Only meaningful while
+    // IsShaderProfilingEnabled() is true; otherwise the counters are stale or
+    // zero. profile_total_ns is summed CPU time inside IssueDraw across all
+    // draws this shader participated in since the last reset.
+    uint64_t profile_total_ns = 0;
+    uint64_t profile_draw_count = 0;
   };
 
   // Per-translation snapshot: there is one of these for every (shader,
@@ -168,6 +175,19 @@ class CommandProcessor {
   void RemoveShaderBlacklist(uint64_t ucode_hash);
   bool IsShaderBlacklisted(uint64_t ucode_hash) const;
   std::vector<uint64_t> GetShaderBlacklist() const;
+
+  // Per-shader CPU-time profiling. The shader debugger overlay enables this
+  // while its window is open and disables it on close so there is no overhead
+  // in the common case. Thread-safe / lock-free on the hot path.
+  bool IsShaderProfilingEnabled() const {
+    return shader_profiling_enabled_.load(std::memory_order_relaxed);
+  }
+  void SetShaderProfilingEnabled(bool enabled) {
+    shader_profiling_enabled_.store(enabled, std::memory_order_relaxed);
+  }
+  // Zero out per-shader counters. Default no-op -- backends with shader caches
+  // override to walk every tracked shader.
+  virtual void ResetShaderProfiling() {}
 
   virtual bool Initialize();
   virtual void Shutdown();
@@ -390,6 +410,10 @@ class CommandProcessor {
   // loading a shader for the first time.
   mutable std::mutex shader_blacklist_mutex_;
   std::unordered_set<uint64_t> shader_blacklist_;
+
+  // Whether per-shader timing should be sampled in IssueDraw. Hot path reads
+  // this every draw, so it's a relaxed atomic.
+  std::atomic<bool> shader_profiling_enabled_{false};
 };
 
 }  // namespace rex::graphics

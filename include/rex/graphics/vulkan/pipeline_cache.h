@@ -88,6 +88,8 @@ class VulkanPipelineCache {
   // drops any cached pipelines that referenced the previous binary.
   bool ReplaceShaderTranslationBinary(uint64_t ucode_hash, uint64_t modification,
                                       std::vector<uint8_t> binary);
+  // Resets per-shader profiling counters across every tracked shader.
+  void ResetShaderProfiling();
 
   // Retrieves the shader modification for the current state. The shader must
   // have microcode analyzed.

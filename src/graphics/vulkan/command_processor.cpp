@@ -11,6 +11,7 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cstdint>
 #include <cstring>
 #include <iterator>
@@ -642,6 +643,13 @@ bool VulkanCommandProcessor::ReplaceShaderTranslationBinary(uint64_t ucode_hash,
   }
   return pipeline_cache_->ReplaceShaderTranslationBinary(ucode_hash, modification,
                                                           std::move(binary));
+}
+
+void VulkanCommandProcessor::ResetShaderProfiling() {
+  if (!pipeline_cache_) {
+    return;
+  }
+  pipeline_cache_->ResetShaderProfiling();
 }
 
 void VulkanCommandProcessor::InvalidateAllVertexBufferResidency() {
@@ -3734,6 +3742,28 @@ bool VulkanCommandProcessor::IssueDraw(xenos::PrimitiveType prim_type, uint32_t 
     }
     draw_util::AddMemExportRanges(regs, *pixel_shader, memexport_ranges_);
   }
+
+  // Per-shader CPU profiling: only sampled when the shader debugger is open.
+  // RAII timer attributes time spent in the rest of IssueDraw to both the
+  // bound vertex and pixel shader. Cheap when disabled (one relaxed load).
+  struct ShaderDrawTimer {
+    VulkanShader* vs;
+    VulkanShader* ps;
+    bool enabled;
+    std::chrono::steady_clock::time_point start;
+    ~ShaderDrawTimer() {
+      if (!enabled) {
+        return;
+      }
+      const uint64_t ns = static_cast<uint64_t>(
+          std::chrono::duration_cast<std::chrono::nanoseconds>(
+              std::chrono::steady_clock::now() - start)
+              .count());
+      if (vs) vs->profile_add_sample(ns);
+      if (ps) ps->profile_add_sample(ns);
+    }
+  } shader_draw_timer{vertex_shader, pixel_shader, IsShaderProfilingEnabled(),
+                      std::chrono::steady_clock::now()};
   reg::RB_DEPTHCONTROL normalized_depth_control = draw_util::GetNormalizedDepthControl(regs);
 
   uint32_t ps_param_gen_pos = UINT32_MAX;

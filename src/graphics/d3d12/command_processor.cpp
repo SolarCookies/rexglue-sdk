@@ -10,6 +10,7 @@
  */
 
 #include <algorithm>
+#include <chrono>
 #include <cstdarg>
 #include <cstring>
 #include <sstream>
@@ -146,6 +147,13 @@ bool D3D12CommandProcessor::ReplaceShaderTranslationBinary(uint64_t ucode_hash,
   }
   return pipeline_cache_->ReplaceShaderTranslationBinary(ucode_hash, modification,
                                                           std::move(binary));
+}
+
+void D3D12CommandProcessor::ResetShaderProfiling() {
+  if (!pipeline_cache_) {
+    return;
+  }
+  pipeline_cache_->ResetShaderProfiling();
 }
 
 void D3D12CommandProcessor::InvalidateAllVertexBufferResidency() {
@@ -2392,6 +2400,28 @@ bool D3D12CommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type, uint3
   }
   bool memexport_used_pixel = pixel_shader && (pixel_shader->memexport_eM_written() != 0);
   bool memexport_used = memexport_used_vertex || memexport_used_pixel;
+
+  // Per-shader CPU profiling: only sampled when the shader debugger is open.
+  // We measure CPU time inside the rest of IssueDraw and attribute it to both
+  // the bound vertex and pixel shader. Cheap when disabled (one relaxed load).
+  struct ShaderDrawTimer {
+    D3D12Shader* vs;
+    D3D12Shader* ps;
+    bool enabled;
+    std::chrono::steady_clock::time_point start;
+    ~ShaderDrawTimer() {
+      if (!enabled) {
+        return;
+      }
+      const uint64_t ns = static_cast<uint64_t>(
+          std::chrono::duration_cast<std::chrono::nanoseconds>(
+              std::chrono::steady_clock::now() - start)
+              .count());
+      if (vs) vs->profile_add_sample(ns);
+      if (ps) ps->profile_add_sample(ns);
+    }
+  } shader_draw_timer{vertex_shader, pixel_shader, IsShaderProfilingEnabled(),
+                      std::chrono::steady_clock::now()};
 
   if (!BeginSubmission(true)) {
     return false;
