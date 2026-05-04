@@ -566,11 +566,15 @@ void VulkanPipelineCache::InitializeShaderStorage(const std::filesystem::path& c
 
   // Translate shader modifications needed for stored pipelines.
   for (const std::pair<uint64_t, uint64_t>& translation_needed : shader_translations_needed) {
-    auto shader_it = shaders_.find(translation_needed.first);
-    if (shader_it == shaders_.end()) {
-      continue;
+    VulkanShader* shader;
+    {
+      std::lock_guard<std::mutex> lock(shaders_mutex_);
+      auto shader_it = shaders_.find(translation_needed.first);
+      if (shader_it == shaders_.end()) {
+        continue;
+      }
+      shader = shader_it->second;
     }
-    auto* shader = shader_it->second;
     if (!shader->is_ucode_analyzed()) {
       shader->AnalyzeUcode(ucode_disasm_buffer_);
     }
@@ -867,10 +871,13 @@ void VulkanPipelineCache::Shutdown() {
   geometry_shaders_.clear();
 
   // Destroy all translated shaders.
-  for (auto it : shaders_) {
-    delete it.second;
+  {
+    std::lock_guard<std::mutex> lock(shaders_mutex_);
+    for (auto it : shaders_) {
+      delete it.second;
+    }
+    shaders_.clear();
   }
-  shaders_.clear();
   shader_storage_index_ = 0;
   texture_binding_layout_map_.clear();
   texture_binding_layouts_.clear();
@@ -889,6 +896,7 @@ VulkanShader* VulkanPipelineCache::LoadShader(xenos::ShaderType shader_type,
 VulkanShader* VulkanPipelineCache::LoadShader(xenos::ShaderType shader_type,
                                               const uint32_t* host_address, uint32_t dword_count,
                                               uint64_t data_hash) {
+  std::lock_guard<std::mutex> lock(shaders_mutex_);
   auto it = shaders_.find(data_hash);
   if (it != shaders_.end()) {
     // Shader has been previously loaded.
@@ -899,8 +907,125 @@ VulkanShader* VulkanPipelineCache::LoadShader(xenos::ShaderType shader_type,
   // again.
   VulkanShader* shader = new VulkanShader(command_processor_.GetVulkanDevice(), shader_type,
                                           data_hash, host_address, dword_count);
+  if (command_processor_.IsShaderBlacklisted(data_hash)) {
+    shader->set_disabled(true);
+  }
   shaders_.emplace(data_hash, shader);
   return shader;
+}
+
+std::vector<CommandProcessor::ShaderInfo> VulkanPipelineCache::GetShaderSnapshot(
+    uint64_t active_vertex_hash, uint64_t active_pixel_hash) const {
+  std::vector<CommandProcessor::ShaderInfo> result;
+  std::lock_guard<std::mutex> lock(shaders_mutex_);
+  result.reserve(shaders_.size());
+  for (const auto& kv : shaders_) {
+    const VulkanShader* shader = kv.second;
+    if (!shader) {
+      continue;
+    }
+    CommandProcessor::ShaderInfo info;
+    info.ucode_hash = kv.first;
+    info.type = shader->type();
+    info.dword_count = static_cast<uint32_t>(shader->ucode_dword_count());
+    info.disabled = shader->disabled();
+    info.active = (kv.first == active_vertex_hash) || (kv.first == active_pixel_hash);
+    result.push_back(info);
+  }
+  return result;
+}
+
+void VulkanPipelineCache::SetShaderDisabledByHash(uint64_t ucode_hash, bool disabled) {
+  std::lock_guard<std::mutex> lock(shaders_mutex_);
+  auto it = shaders_.find(ucode_hash);
+  if (it != shaders_.end() && it->second) {
+    it->second->set_disabled(disabled);
+  }
+}
+
+CommandProcessor::ShaderDetails VulkanPipelineCache::GetShaderDetails(uint64_t ucode_hash) const {
+  CommandProcessor::ShaderDetails details;
+  VulkanShader* shader = nullptr;
+  {
+    std::lock_guard<std::mutex> lock(shaders_mutex_);
+    auto it = shaders_.find(ucode_hash);
+    if (it == shaders_.end() || !it->second) {
+      return details;
+    }
+    shader = it->second;
+  }
+  if (!shader->is_ucode_analyzed()) {
+    string::StringBuffer scratch;
+    shader->AnalyzeUcode(scratch);
+  }
+  details.found = true;
+  details.info.ucode_hash = ucode_hash;
+  details.info.type = shader->type();
+  details.info.dword_count = static_cast<uint32_t>(shader->ucode_dword_count());
+  details.info.disabled = shader->disabled();
+  details.ucode_disassembly = shader->ucode_disassembly();
+  details.ucode_dwords = shader->ucode_data();
+  for (const auto& tr_kv : shader->translations()) {
+    const auto* translation = tr_kv.second;
+    if (!translation) continue;
+    CommandProcessor::ShaderTranslationInfo ti;
+    ti.modification = translation->modification();
+    ti.is_translated = translation->is_translated();
+    ti.is_valid = translation->is_valid();
+    ti.host_disassembly = translation->host_disassembly();
+    ti.translated_binary = translation->translated_binary();
+    details.translations.push_back(std::move(ti));
+  }
+  return details;
+}
+
+bool VulkanPipelineCache::ReplaceShaderTranslationBinary(uint64_t ucode_hash, uint64_t modification,
+                                                         std::vector<uint8_t> binary) {
+  // Verify presence first.
+  {
+    std::lock_guard<std::mutex> lock(shaders_mutex_);
+    auto it = shaders_.find(ucode_hash);
+    if (it == shaders_.end() || !it->second) {
+      return false;
+    }
+    if (!it->second->GetTranslation(modification)) {
+      return false;
+    }
+  }
+  command_processor_.CallInThread([this, ucode_hash, modification, binary = std::move(binary)]() {
+    VulkanShader::VulkanTranslation* tr = nullptr;
+    {
+      std::lock_guard<std::mutex> lock(shaders_mutex_);
+      auto it = shaders_.find(ucode_hash);
+      if (it == shaders_.end() || !it->second) {
+        return;
+      }
+      tr = static_cast<VulkanShader::VulkanTranslation*>(it->second->GetTranslation(modification));
+    }
+    if (!tr) {
+      return;
+    }
+    tr->set_translated_binary(std::move(const_cast<std::vector<uint8_t>&>(binary)));
+
+    // Drop every cached pipeline that referenced this shader so it gets
+    // rebuilt from the new binary on next use.
+    last_pipeline_ = nullptr;
+    for (auto it = pipelines_.begin(); it != pipelines_.end();) {
+      if (it->first.vertex_shader_hash == ucode_hash ||
+          it->first.pixel_shader_hash == ucode_hash) {
+        VkPipeline old = it->second.pipeline.load(std::memory_order_acquire);
+        if (old != VK_NULL_HANDLE) {
+          std::lock_guard<std::mutex> lock(deferred_destroy_lock_);
+          deferred_destroy_pipelines_.emplace_back(command_processor_.GetCurrentSubmission(),
+                                                   old);
+        }
+        it = pipelines_.erase(it);
+      } else {
+        ++it;
+      }
+    }
+  });
+  return true;
 }
 
 SpirvShaderTranslator::Modification VulkanPipelineCache::GetCurrentVertexShaderModification(
@@ -2899,12 +3024,17 @@ bool VulkanPipelineCache::TryGetPipelineCreationArgumentsForDescription(
     return fail("pipeline_requirements_not_met");
   }
 
-  auto vertex_shader_it = shaders_.find(description.vertex_shader_hash);
-  if (vertex_shader_it == shaders_.end()) {
-    return fail("vertex_shader_not_found");
+  VulkanShader* vertex_shader_object;
+  {
+    std::lock_guard<std::mutex> lock(shaders_mutex_);
+    auto vertex_shader_it = shaders_.find(description.vertex_shader_hash);
+    if (vertex_shader_it == shaders_.end()) {
+      return fail("vertex_shader_not_found");
+    }
+    vertex_shader_object = vertex_shader_it->second;
   }
   auto* vertex_shader = static_cast<VulkanShader::VulkanTranslation*>(
-      vertex_shader_it->second->GetTranslation(description.vertex_shader_modification));
+      vertex_shader_object->GetTranslation(description.vertex_shader_modification));
   if (!vertex_shader || !vertex_shader->is_translated() || !vertex_shader->is_valid()) {
     return fail("vertex_shader_translation_missing_or_invalid");
   }
@@ -2916,12 +3046,17 @@ bool VulkanPipelineCache::TryGetPipelineCreationArgumentsForDescription(
 
   VulkanShader::VulkanTranslation* pixel_shader = nullptr;
   if (description.pixel_shader_hash && !for_placeholder) {
-    auto pixel_shader_it = shaders_.find(description.pixel_shader_hash);
-    if (pixel_shader_it == shaders_.end()) {
-      return fail("pixel_shader_not_found");
+    VulkanShader* pixel_shader_object;
+    {
+      std::lock_guard<std::mutex> lock(shaders_mutex_);
+      auto pixel_shader_it = shaders_.find(description.pixel_shader_hash);
+      if (pixel_shader_it == shaders_.end()) {
+        return fail("pixel_shader_not_found");
+      }
+      pixel_shader_object = pixel_shader_it->second;
     }
     pixel_shader = static_cast<VulkanShader::VulkanTranslation*>(
-        pixel_shader_it->second->GetTranslation(description.pixel_shader_modification));
+        pixel_shader_object->GetTranslation(description.pixel_shader_modification));
     if (!pixel_shader || !pixel_shader->is_translated() || !pixel_shader->is_valid()) {
       return fail("pixel_shader_translation_missing_or_invalid");
     }

@@ -19,6 +19,7 @@
 #include <queue>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include <rex/graphics/register_file.h>
@@ -90,6 +91,83 @@ class CommandProcessor {
 
   Shader* active_vertex_shader() const { return active_vertex_shader_; }
   Shader* active_pixel_shader() const { return active_pixel_shader_; }
+
+  // Snapshot of a single tracked shader for the debugger UI. Plain data so
+  // callers don't need to touch graphics-internal Shader objects from other
+  // threads.
+  struct ShaderInfo {
+    uint64_t ucode_hash = 0;
+    xenos::ShaderType type = xenos::ShaderType::kVertex;
+    uint32_t dword_count = 0;
+    bool disabled = false;
+    bool active = false;
+  };
+
+  // Per-translation snapshot: there is one of these for every (shader,
+  // modification bits) host pipeline variant the backend has produced.
+  struct ShaderTranslationInfo {
+    uint64_t modification = 0;
+    bool is_translated = false;
+    bool is_valid = false;
+    // Host backend-specific disassembly text (e.g. DXBC ASM, SPIR-V text).
+    std::string host_disassembly;
+    // Raw translated binary bytes (DXBC/DXIL/SPIR-V/...).
+    std::vector<uint8_t> translated_binary;
+  };
+
+  // Full detail for a single shader, used by the debugger viewer pane.
+  struct ShaderDetails {
+    bool found = false;
+    ShaderInfo info;
+    // Xenos microcode disassembly (D3D format). Always available once the
+    // shader's ucode has been analyzed (which the debugger forces).
+    std::string ucode_disassembly;
+    // Raw microcode dwords (host endianness).
+    std::vector<uint32_t> ucode_dwords;
+    std::vector<ShaderTranslationInfo> translations;
+  };
+
+  // Returns a thread-safe snapshot of every shader currently tracked by the
+  // backend's pipeline cache. Default returns an empty list -- backends that
+  // maintain a shader cache should override.
+  virtual std::vector<ShaderInfo> GetShaderSnapshot() const { return {}; }
+
+  // Toggle the disabled flag on a previously enumerated shader. Looks the
+  // shader up by its ucode hash. No-op if the hash is unknown. Default does
+  // nothing -- backends override.
+  virtual void SetShaderDisabledByHash(uint64_t ucode_hash, bool disabled) {
+    (void)ucode_hash;
+    (void)disabled;
+  }
+
+  // Returns full details for a shader (ucode disassembly + every translation).
+  // Returns ShaderDetails{found=false} if the hash is unknown. Default does
+  // nothing -- backends override.
+  virtual ShaderDetails GetShaderDetails(uint64_t ucode_hash) const {
+    (void)ucode_hash;
+    return {};
+  }
+
+  // Replaces the translated host binary for one (shader, modification) pair
+  // and invalidates any cached pipeline state objects that referenced the old
+  // binary so the GPU picks up the new code on the next draw. Returns true if
+  // the shader was found and the replacement was queued.
+  virtual bool ReplaceShaderTranslationBinary(uint64_t ucode_hash, uint64_t modification,
+                                              std::vector<uint8_t> binary) {
+    (void)ucode_hash;
+    (void)modification;
+    (void)binary;
+    return false;
+  }
+
+  // Permanently disable a shader by ucode hash. The hash is remembered even if
+  // the shader hasn't been seen yet -- when the backend later loads a shader
+  // matching a blacklisted hash it will be marked disabled immediately. Any
+  // already-loaded matching shader is also disabled now. Thread-safe.
+  void AddShaderBlacklist(uint64_t ucode_hash);
+  void RemoveShaderBlacklist(uint64_t ucode_hash);
+  bool IsShaderBlacklisted(uint64_t ucode_hash) const;
+  std::vector<uint64_t> GetShaderBlacklist() const;
 
   virtual bool Initialize();
   virtual void Shutdown();
@@ -307,6 +385,11 @@ class CommandProcessor {
   reg::DC_LUT_30_COLOR gamma_ramp_256_entry_table_[256] = {};
   reg::DC_LUT_PWL_DATA gamma_ramp_pwl_rgb_[128][3] = {};
   uint32_t gamma_ramp_rw_component_ = 0;
+
+  // Permanently-disabled shader hashes. Consulted by pipeline caches when
+  // loading a shader for the first time.
+  mutable std::mutex shader_blacklist_mutex_;
+  std::unordered_set<uint64_t> shader_blacklist_;
 };
 
 }  // namespace rex::graphics

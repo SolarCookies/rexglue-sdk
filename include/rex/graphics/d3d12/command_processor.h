@@ -62,6 +62,13 @@ class D3D12CommandProcessor : public CommandProcessor {
 
   void RestoreEdramSnapshot(const void* snapshot) override;
 
+  // Shader debugger UI hooks.
+  std::vector<ShaderInfo> GetShaderSnapshot() const override;
+  void SetShaderDisabledByHash(uint64_t ucode_hash, bool disabled) override;
+  ShaderDetails GetShaderDetails(uint64_t ucode_hash) const override;
+  bool ReplaceShaderTranslationBinary(uint64_t ucode_hash, uint64_t modification,
+                                      std::vector<uint8_t> binary) override;
+
   ui::d3d12::D3D12Provider& GetD3D12Provider() const {
     return *static_cast<ui::d3d12::D3D12Provider*>(graphics_system_->provider());
   }

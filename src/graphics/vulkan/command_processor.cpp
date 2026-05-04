@@ -610,6 +610,40 @@ void VulkanCommandProcessor::InvalidateGpuMemory() {
   }
 }
 
+std::vector<CommandProcessor::ShaderInfo> VulkanCommandProcessor::GetShaderSnapshot() const {
+  if (!pipeline_cache_) {
+    return {};
+  }
+  uint64_t active_vs_hash = active_vertex_shader_ ? active_vertex_shader_->ucode_data_hash() : 0;
+  uint64_t active_ps_hash = active_pixel_shader_ ? active_pixel_shader_->ucode_data_hash() : 0;
+  return pipeline_cache_->GetShaderSnapshot(active_vs_hash, active_ps_hash);
+}
+
+void VulkanCommandProcessor::SetShaderDisabledByHash(uint64_t ucode_hash, bool disabled) {
+  if (!pipeline_cache_) {
+    return;
+  }
+  pipeline_cache_->SetShaderDisabledByHash(ucode_hash, disabled);
+}
+
+CommandProcessor::ShaderDetails VulkanCommandProcessor::GetShaderDetails(
+    uint64_t ucode_hash) const {
+  if (!pipeline_cache_) {
+    return {};
+  }
+  return pipeline_cache_->GetShaderDetails(ucode_hash);
+}
+
+bool VulkanCommandProcessor::ReplaceShaderTranslationBinary(uint64_t ucode_hash,
+                                                             uint64_t modification,
+                                                             std::vector<uint8_t> binary) {
+  if (!pipeline_cache_) {
+    return false;
+  }
+  return pipeline_cache_->ReplaceShaderTranslationBinary(ucode_hash, modification,
+                                                          std::move(binary));
+}
+
 void VulkanCommandProcessor::InvalidateAllVertexBufferResidency() {
   vertex_buffers_in_sync_[0] = 0;
   vertex_buffers_in_sync_[1] = 0;
@@ -3641,6 +3675,10 @@ bool VulkanCommandProcessor::IssueDraw(xenos::PrimitiveType prim_type, uint32_t 
     // Always need a vertex shader.
     return draw_fail("missing_vertex_shader");
   }
+  if (vertex_shader->disabled()) {
+    // Shader debugger has muted this vertex program -- skip the draw entirely.
+    return true;
+  }
   pipeline_cache_->AnalyzeShaderUcode(*vertex_shader);
   bool memexport_used_vertex = vertex_shader->memexport_eM_written() != 0;
   if (memexport_used_vertex) {
@@ -3668,6 +3706,10 @@ bool VulkanCommandProcessor::IssueDraw(xenos::PrimitiveType prim_type, uint32_t 
     if (edram_mode == xenos::EdramMode::kColorDepth) {
       pixel_shader = static_cast<VulkanShader*>(active_pixel_shader());
       if (pixel_shader) {
+        if (pixel_shader->disabled()) {
+          // Shader debugger has muted this pixel program -- skip the draw.
+          return true;
+        }
         pipeline_cache_->AnalyzeShaderUcode(*pixel_shader);
         if (!draw_util::IsPixelShaderNeededWithRasterization(*pixel_shader, regs)) {
           pixel_shader = nullptr;
