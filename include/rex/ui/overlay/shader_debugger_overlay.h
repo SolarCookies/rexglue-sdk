@@ -31,6 +31,10 @@ struct ShaderDebuggerEntry {
   uint32_t dword_count = 0;
   bool disabled = false;
   bool active = false;
+  // CPU time accumulated by the backend while this shader was bound, in
+  // nanoseconds. Only populated while profiling is enabled.
+  uint64_t profile_total_ns = 0;
+  uint64_t profile_draw_count = 0;
 };
 
 // Per-translation snapshot for the viewer pane.
@@ -58,10 +62,16 @@ class ShaderDebuggerDialog : public ImGuiDialog {
   using DetailsProvider = std::function<ShaderDebuggerDetails(uint64_t ucode_hash)>;
   using BinaryReplacer = std::function<bool(uint64_t ucode_hash, uint64_t modification,
                                             std::vector<uint8_t> binary)>;
+  // Toggles backend per-shader timing collection. The dialog enables this in
+  // its constructor and disables it in its destructor so there's no overhead
+  // while the debugger is closed.
+  using ProfilingToggle = std::function<void(bool enabled)>;
+  using ProfilingResetter = std::function<void()>;
 
   ShaderDebuggerDialog(ImGuiDrawer* imgui_drawer, SnapshotProvider snapshot_provider,
                        DisableSetter disable_setter, DetailsProvider details_provider,
-                       BinaryReplacer binary_replacer);
+                       BinaryReplacer binary_replacer, ProfilingToggle profiling_toggle,
+                       ProfilingResetter profiling_resetter);
   ~ShaderDebuggerDialog();
 
  protected:
@@ -76,6 +86,8 @@ class ShaderDebuggerDialog : public ImGuiDialog {
   DisableSetter disable_setter_;
   DetailsProvider details_provider_;
   BinaryReplacer binary_replacer_;
+  ProfilingToggle profiling_toggle_;
+  ProfilingResetter profiling_resetter_;
 
   char filter_buf_[128] = {};
   bool show_vertex_ = true;

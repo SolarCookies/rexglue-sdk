@@ -930,9 +930,20 @@ std::vector<CommandProcessor::ShaderInfo> VulkanPipelineCache::GetShaderSnapshot
     info.dword_count = static_cast<uint32_t>(shader->ucode_dword_count());
     info.disabled = shader->disabled();
     info.active = (kv.first == active_vertex_hash) || (kv.first == active_pixel_hash);
+    info.profile_total_ns = shader->profile_total_ns();
+    info.profile_draw_count = shader->profile_draw_count();
     result.push_back(info);
   }
   return result;
+}
+
+void VulkanPipelineCache::ResetShaderProfiling() {
+  std::lock_guard<std::mutex> lock(shaders_mutex_);
+  for (const auto& kv : shaders_) {
+    if (kv.second) {
+      kv.second->profile_reset();
+    }
+  }
 }
 
 void VulkanPipelineCache::SetShaderDisabledByHash(uint64_t ucode_hash, bool disabled) {

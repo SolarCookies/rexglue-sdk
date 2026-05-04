@@ -264,6 +264,8 @@ bool ReXApp::OnInitialize() {
                 e.dword_count = s.dword_count;
                 e.disabled = s.disabled;
                 e.active = s.active;
+                e.profile_total_ns = s.profile_total_ns;
+                e.profile_draw_count = s.profile_draw_count;
                 out.push_back(e);
               }
               return out;
@@ -313,9 +315,26 @@ bool ReXApp::OnInitialize() {
               if (!cp) return false;
               return cp->ReplaceShaderTranslationBinary(hash, modification, std::move(binary));
             };
+            auto profiling_toggle = [this](bool enabled) {
+              if (!runtime_) return;
+              auto* gs = static_cast<rex::graphics::GraphicsSystem*>(runtime_->graphics_system());
+              if (!gs) return;
+              auto* cp = gs->command_processor();
+              if (!cp) return;
+              cp->SetShaderProfilingEnabled(enabled);
+            };
+            auto profiling_resetter = [this]() {
+              if (!runtime_) return;
+              auto* gs = static_cast<rex::graphics::GraphicsSystem*>(runtime_->graphics_system());
+              if (!gs) return;
+              auto* cp = gs->command_processor();
+              if (!cp) return;
+              cp->ResetShaderProfiling();
+            };
             shader_debugger_overlay_ = std::make_unique<ui::ShaderDebuggerDialog>(
                 imgui_drawer_.get(), std::move(snapshot_provider), std::move(disable_setter),
-                std::move(details_provider), std::move(binary_replacer));
+                std::move(details_provider), std::move(binary_replacer),
+                std::move(profiling_toggle), std::move(profiling_resetter));
           }
           UpdateBuiltinOverlayInputMode();
         });

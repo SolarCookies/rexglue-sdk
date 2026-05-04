@@ -145,6 +145,7 @@ class VulkanCommandProcessor : public CommandProcessor {
   ShaderDetails GetShaderDetails(uint64_t ucode_hash) const override;
   bool ReplaceShaderTranslationBinary(uint64_t ucode_hash, uint64_t modification,
                                       std::vector<uint8_t> binary) override;
+  void ResetShaderProfiling() override;
 
   ui::vulkan::VulkanDevice* GetVulkanDevice() const {
     return static_cast<const ui::vulkan::VulkanProvider*>(graphics_system_->provider())
