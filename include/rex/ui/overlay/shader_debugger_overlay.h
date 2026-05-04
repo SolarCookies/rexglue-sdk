@@ -74,8 +74,15 @@ class ShaderDebuggerDialog : public ImGuiDialog {
                        DisableSetter disable_setter, DetailsProvider details_provider,
                        BinaryReplacer binary_replacer, ProfilingToggle profiling_toggle,
                        ProfilingResetter profiling_resetter,
-                       std::filesystem::path names_toml_path = {});
+                       std::filesystem::path shaders_toml_path = {});
   ~ShaderDebuggerDialog();
+
+  // Reads a shaders.toml file and returns the set of shader hashes whose
+  // entry has disabled=true. Intended to be called by the application at
+  // startup so the persistent blacklist can be installed before any shader
+  // is loaded. Returns an empty vector if the file is missing or unreadable.
+  static std::vector<uint64_t> ReadShaderBlacklistFromToml(
+      const std::filesystem::path& path);
 
  protected:
   void OnDraw(ImGuiIO& io) override;
@@ -86,10 +93,15 @@ class ShaderDebuggerDialog : public ImGuiDialog {
   void RefreshSelectedDetails();
   // Returns the user-assigned name for a hash, or empty string if unset.
   std::string LookupName(uint64_t hash) const;
-  // Sets/clears a name and persists shaders.toml. Empty name removes entry.
+  // Returns the persisted disabled flag for a hash (false if no entry).
+  bool LookupDisabled(uint64_t hash) const;
+  // Sets/clears a name and persists shaders.toml. Empty name + disabled=false
+  // removes the entry entirely.
   void SetName(uint64_t hash, std::string name);
-  void LoadNamesFromDisk();
-  void SaveNamesToDisk() const;
+  // Persists the disabled flag for a hash and saves shaders.toml.
+  void SetDisabled(uint64_t hash, bool disabled);
+  void LoadShadersFromDisk();
+  void SaveShadersToDisk() const;
 
   SnapshotProvider snapshot_provider_;
   DisableSetter disable_setter_;
@@ -117,10 +129,15 @@ class ShaderDebuggerDialog : public ImGuiDialog {
   char binary_path_buf_[512] = {};
   std::string status_message_;
 
-  // Persistent per-hash documentation names. Loaded from / saved to
-  // names_toml_path_ if non-empty.
-  std::filesystem::path names_toml_path_;
-  std::unordered_map<uint64_t, std::string> shader_names_;
+  // Per-hash settings persisted to disk.
+  struct ShaderTomlEntry {
+    std::string name;
+    bool disabled = false;
+  };
+  // Persistent per-hash documentation names + disable flags. Loaded from /
+  // saved to shaders_toml_path_ if non-empty.
+  std::filesystem::path shaders_toml_path_;
+  std::unordered_map<uint64_t, ShaderTomlEntry> shader_entries_;
   // Edit buffer for the rename input in the details panel.
   char rename_buf_[128] = {};
 };
