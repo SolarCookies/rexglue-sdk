@@ -21,6 +21,7 @@ set(REXUI_OVERLAY_SOURCES
     overlay/debug_overlay.cpp
     overlay/console_overlay.cpp
     overlay/settings_overlay.cpp
+    overlay/shader_debugger_overlay.cpp
 )
 
 # Vulkan UI backend

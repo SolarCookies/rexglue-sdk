@@ -26,6 +26,7 @@
 #include <vector>
 
 #include <rex/assert.h>
+#include <rex/graphics/command_processor.h>
 #include <rex/graphics/d3d12/render_target_cache.h>
 #include <rex/graphics/d3d12/shader.h>
 #include <rex/graphics/flags.h>
@@ -70,6 +71,20 @@ class PipelineCache {
                           uint32_t dword_count);
   // Analyze shader microcode on the translator thread.
   void AnalyzeShaderUcode(Shader& shader) { shader.AnalyzeUcode(ucode_disasm_buffer_); }
+
+  // Returns a snapshot of every shader currently tracked, for the in-game
+  // shader debugger UI. Thread-safe.
+  std::vector<CommandProcessor::ShaderInfo> GetShaderSnapshot(uint64_t active_vertex_hash,
+                                                              uint64_t active_pixel_hash) const;
+  // Toggle the disabled flag on a shader by ucode hash. Thread-safe.
+  void SetShaderDisabledByHash(uint64_t ucode_hash, bool disabled);
+  // Returns full details for one shader (used by the debugger viewer pane).
+  // Forces ucode analysis if it has not been performed yet.
+  CommandProcessor::ShaderDetails GetShaderDetails(uint64_t ucode_hash) const;
+  // Replaces the translated host binary for a (shader, modification) pair and
+  // drops any cached pipelines that referenced the previous binary.
+  bool ReplaceShaderTranslationBinary(uint64_t ucode_hash, uint64_t modification,
+                                      std::vector<uint8_t> binary);
 
   // Retrieves the shader modification for the current state. The shader must
   // have microcode analyzed.
@@ -313,6 +328,8 @@ class PipelineCache {
 
   // Ucode hash -> shader.
   std::unordered_map<uint64_t, D3D12Shader*, rex::IdentityHasher<uint64_t>> shaders_;
+  // Protects shaders_ for cross-thread access (debugger UI on the UI thread).
+  mutable std::mutex shaders_mutex_;
 
   struct LayoutUID {
     size_t uid;

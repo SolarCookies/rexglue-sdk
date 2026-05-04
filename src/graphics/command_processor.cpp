@@ -243,6 +243,33 @@ void CommandProcessor::ClearCaches() {}
 
 void CommandProcessor::InvalidateGpuMemory() {}
 
+void CommandProcessor::AddShaderBlacklist(uint64_t ucode_hash) {
+  {
+    std::lock_guard<std::mutex> lock(shader_blacklist_mutex_);
+    shader_blacklist_.insert(ucode_hash);
+  }
+  // If the shader is already loaded in the backend, disable it now too.
+  SetShaderDisabledByHash(ucode_hash, true);
+}
+
+void CommandProcessor::RemoveShaderBlacklist(uint64_t ucode_hash) {
+  {
+    std::lock_guard<std::mutex> lock(shader_blacklist_mutex_);
+    shader_blacklist_.erase(ucode_hash);
+  }
+  SetShaderDisabledByHash(ucode_hash, false);
+}
+
+bool CommandProcessor::IsShaderBlacklisted(uint64_t ucode_hash) const {
+  std::lock_guard<std::mutex> lock(shader_blacklist_mutex_);
+  return shader_blacklist_.find(ucode_hash) != shader_blacklist_.end();
+}
+
+std::vector<uint64_t> CommandProcessor::GetShaderBlacklist() const {
+  std::lock_guard<std::mutex> lock(shader_blacklist_mutex_);
+  return std::vector<uint64_t>(shader_blacklist_.begin(), shader_blacklist_.end());
+}
+
 ReadbackResolveMode CommandProcessor::GetReadbackResolveMode(
     bool legacy_readback_resolve_enabled) const {
   ReadbackResolveMode shared_mode = ParseReadbackResolveMode(REXCVAR_GET(readback_resolve));

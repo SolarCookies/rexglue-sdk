@@ -206,10 +206,13 @@ void PipelineCache::Shutdown() {
   }
   texture_binding_layout_map_.clear();
   texture_binding_layouts_.clear();
-  for (auto it : shaders_) {
-    delete it.second;
+  {
+    std::lock_guard<std::mutex> lock(shaders_mutex_);
+    for (auto it : shaders_) {
+      delete it.second;
+    }
+    shaders_.clear();
   }
-  shaders_.clear();
   shader_storage_index_ = 0;
 
   // Shut down shader translation.
@@ -505,7 +508,10 @@ void PipelineCache::InitializeShaderStorage(const std::filesystem::path& cache_r
         D3D12Shader* shader = static_cast<D3D12Shader*>(&translation->shader());
         shader->DestroyTranslation(translation->modification());
         if (shader->translations().empty()) {
-          shaders_.erase(shader->ucode_data_hash());
+          {
+            std::lock_guard<std::mutex> lock(shaders_mutex_);
+            shaders_.erase(shader->ucode_data_hash());
+          }
           delete shader;
         }
       }
@@ -563,11 +569,15 @@ void PipelineCache::InitializeShaderStorage(const std::filesystem::path& cache_r
       }
 
       PipelineRuntimeDescription pipeline_runtime_description;
-      auto vertex_shader_it = shaders_.find(pipeline_description.vertex_shader_hash);
-      if (vertex_shader_it == shaders_.end()) {
-        continue;
+      D3D12Shader* vertex_shader;
+      {
+        std::lock_guard<std::mutex> lock(shaders_mutex_);
+        auto vertex_shader_it = shaders_.find(pipeline_description.vertex_shader_hash);
+        if (vertex_shader_it == shaders_.end()) {
+          continue;
+        }
+        vertex_shader = vertex_shader_it->second;
       }
-      D3D12Shader* vertex_shader = vertex_shader_it->second;
       pipeline_runtime_description.vertex_shader = static_cast<D3D12Shader::D3D12Translation*>(
           vertex_shader->GetTranslation(pipeline_description.vertex_shader_modification));
       if (!pipeline_runtime_description.vertex_shader ||
@@ -577,11 +587,14 @@ void PipelineCache::InitializeShaderStorage(const std::filesystem::path& cache_r
       }
       D3D12Shader* pixel_shader;
       if (pipeline_description.pixel_shader_hash) {
-        auto pixel_shader_it = shaders_.find(pipeline_description.pixel_shader_hash);
-        if (pixel_shader_it == shaders_.end()) {
-          continue;
+        {
+          std::lock_guard<std::mutex> lock(shaders_mutex_);
+          auto pixel_shader_it = shaders_.find(pipeline_description.pixel_shader_hash);
+          if (pixel_shader_it == shaders_.end()) {
+            continue;
+          }
+          pixel_shader = pixel_shader_it->second;
         }
-        pixel_shader = pixel_shader_it->second;
         pipeline_runtime_description.pixel_shader = static_cast<D3D12Shader::D3D12Translation*>(
             pixel_shader->GetTranslation(pipeline_description.pixel_shader_modification));
         if (!pipeline_runtime_description.pixel_shader ||
@@ -801,6 +814,7 @@ D3D12Shader* PipelineCache::LoadShader(xenos::ShaderType shader_type, const uint
 
 D3D12Shader* PipelineCache::LoadShader(xenos::ShaderType shader_type, const uint32_t* host_address,
                                        uint32_t dword_count, uint64_t data_hash) {
+  std::lock_guard<std::mutex> lock(shaders_mutex_);
   auto it = shaders_.find(data_hash);
   if (it != shaders_.end()) {
     // Shader has been previously loaded.
@@ -810,8 +824,134 @@ D3D12Shader* PipelineCache::LoadShader(xenos::ShaderType shader_type, const uint
   // We need to track it even if it fails translation so we know not to try
   // again.
   D3D12Shader* shader = new D3D12Shader(shader_type, data_hash, host_address, dword_count);
+  if (command_processor_.IsShaderBlacklisted(data_hash)) {
+    shader->set_disabled(true);
+  }
   shaders_.emplace(data_hash, shader);
   return shader;
+}
+
+std::vector<CommandProcessor::ShaderInfo> PipelineCache::GetShaderSnapshot(
+    uint64_t active_vertex_hash, uint64_t active_pixel_hash) const {
+  std::vector<CommandProcessor::ShaderInfo> result;
+  std::lock_guard<std::mutex> lock(shaders_mutex_);
+  result.reserve(shaders_.size());
+  for (const auto& kv : shaders_) {
+    const D3D12Shader* shader = kv.second;
+    if (!shader) {
+      continue;
+    }
+    CommandProcessor::ShaderInfo info;
+    info.ucode_hash = kv.first;
+    info.type = shader->type();
+    info.dword_count = static_cast<uint32_t>(shader->ucode_dword_count());
+    info.disabled = shader->disabled();
+    info.active = (kv.first == active_vertex_hash) || (kv.first == active_pixel_hash);
+    result.push_back(info);
+  }
+  return result;
+}
+
+void PipelineCache::SetShaderDisabledByHash(uint64_t ucode_hash, bool disabled) {
+  std::lock_guard<std::mutex> lock(shaders_mutex_);
+  auto it = shaders_.find(ucode_hash);
+  if (it != shaders_.end() && it->second) {
+    it->second->set_disabled(disabled);
+  }
+}
+
+CommandProcessor::ShaderDetails PipelineCache::GetShaderDetails(uint64_t ucode_hash) const {
+  CommandProcessor::ShaderDetails details;
+  D3D12Shader* shader = nullptr;
+  {
+    std::lock_guard<std::mutex> lock(shaders_mutex_);
+    auto it = shaders_.find(ucode_hash);
+    if (it == shaders_.end() || !it->second) {
+      return details;
+    }
+    shader = it->second;
+  }
+  // Force ucode analysis on demand so the user always sees disassembly.
+  // ucode_disasm_buffer_ is owned by this cache and only used on the CP
+  // thread for normal translation; for an interactive debugger fetch a
+  // separate buffer is fine.
+  if (!shader->is_ucode_analyzed()) {
+    string::StringBuffer scratch;
+    shader->AnalyzeUcode(scratch);
+  }
+  details.found = true;
+  details.info.ucode_hash = ucode_hash;
+  details.info.type = shader->type();
+  details.info.dword_count = static_cast<uint32_t>(shader->ucode_dword_count());
+  details.info.disabled = shader->disabled();
+  details.ucode_disassembly = shader->ucode_disassembly();
+  details.ucode_dwords = shader->ucode_data();
+  for (const auto& tr_kv : shader->translations()) {
+    const auto* translation = tr_kv.second;
+    if (!translation) continue;
+    CommandProcessor::ShaderTranslationInfo ti;
+    ti.modification = translation->modification();
+    ti.is_translated = translation->is_translated();
+    ti.is_valid = translation->is_valid();
+    ti.host_disassembly = translation->host_disassembly();
+    ti.translated_binary = translation->translated_binary();
+    details.translations.push_back(std::move(ti));
+  }
+  return details;
+}
+
+bool PipelineCache::ReplaceShaderTranslationBinary(uint64_t ucode_hash, uint64_t modification,
+                                                   std::vector<uint8_t> binary) {
+  // Verify the shader / translation exists before scheduling any work.
+  D3D12Shader::D3D12Translation* translation = nullptr;
+  {
+    std::lock_guard<std::mutex> lock(shaders_mutex_);
+    auto it = shaders_.find(ucode_hash);
+    if (it == shaders_.end() || !it->second) {
+      return false;
+    }
+    translation = static_cast<D3D12Shader::D3D12Translation*>(
+        it->second->GetTranslation(modification));
+  }
+  if (!translation) {
+    return false;
+  }
+  // Defer the actual mutation onto the command processor thread so we don't
+  // race with an in-flight draw that's reading the binary or building a PSO.
+  command_processor_.CallInThread([this, ucode_hash, modification, binary = std::move(binary)]() {
+    D3D12Shader::D3D12Translation* tr = nullptr;
+    {
+      std::lock_guard<std::mutex> lock(shaders_mutex_);
+      auto it = shaders_.find(ucode_hash);
+      if (it == shaders_.end() || !it->second) {
+        return;
+      }
+      tr = static_cast<D3D12Shader::D3D12Translation*>(it->second->GetTranslation(modification));
+    }
+    if (!tr) {
+      return;
+    }
+    tr->set_translated_binary(std::move(const_cast<std::vector<uint8_t>&>(binary)));
+
+    // Drop every cached PSO that referenced this shader so it gets rebuilt
+    // from the new binary on next use.
+    current_pipeline_ = nullptr;
+    for (auto it = pipelines_.begin(); it != pipelines_.end();) {
+      const auto& desc = it->second->description.description;
+      if (desc.vertex_shader_hash == ucode_hash || desc.pixel_shader_hash == ucode_hash) {
+        ID3D12PipelineState* state = it->second->state.load(std::memory_order_acquire);
+        if (state) {
+          state->Release();
+        }
+        delete it->second;
+        it = pipelines_.erase(it);
+      } else {
+        ++it;
+      }
+    }
+    COUNT_profile_set("gpu/pipeline_cache/pipelines", pipelines_.size());
+  });
+  return true;
 }
 
 DxbcShaderTranslator::Modification PipelineCache::GetCurrentVertexShaderModification(
