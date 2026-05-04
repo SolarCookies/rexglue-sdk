@@ -20,6 +20,7 @@
 #include <cstring>
 #include <fstream>
 #include <iterator>
+#include <string_view>
 
 #include <imgui.h>
 
@@ -72,7 +73,7 @@ ShaderDebuggerDialog::ShaderDebuggerDialog(ImGuiDrawer* imgui_drawer,
                                            BinaryReplacer binary_replacer,
                                            ProfilingToggle profiling_toggle,
                                            ProfilingResetter profiling_resetter,
-                                           std::filesystem::path names_toml_path)
+                                           std::filesystem::path shaders_toml_path)
     : ImGuiDialog(imgui_drawer),
       snapshot_provider_(std::move(snapshot_provider)),
       disable_setter_(std::move(disable_setter)),
@@ -80,11 +81,11 @@ ShaderDebuggerDialog::ShaderDebuggerDialog(ImGuiDrawer* imgui_drawer,
       binary_replacer_(std::move(binary_replacer)),
       profiling_toggle_(std::move(profiling_toggle)),
       profiling_resetter_(std::move(profiling_resetter)),
-      names_toml_path_(std::move(names_toml_path)) {
+      shaders_toml_path_(std::move(shaders_toml_path)) {
   // Turn on per-shader timing for the lifetime of the dialog.
   if (profiling_toggle_) profiling_toggle_(true);
   if (profiling_resetter_) profiling_resetter_();
-  LoadNamesFromDisk();
+  LoadShadersFromDisk();
 }
 
 ShaderDebuggerDialog::~ShaderDebuggerDialog() {
@@ -92,8 +93,13 @@ ShaderDebuggerDialog::~ShaderDebuggerDialog() {
 }
 
 std::string ShaderDebuggerDialog::LookupName(uint64_t hash) const {
-  auto it = shader_names_.find(hash);
-  return it == shader_names_.end() ? std::string{} : it->second;
+  auto it = shader_entries_.find(hash);
+  return it == shader_entries_.end() ? std::string{} : it->second.name;
+}
+
+bool ShaderDebuggerDialog::LookupDisabled(uint64_t hash) const {
+  auto it = shader_entries_.find(hash);
+  return it != shader_entries_.end() && it->second.disabled;
 }
 
 void ShaderDebuggerDialog::SetName(uint64_t hash, std::string name) {
@@ -103,12 +109,41 @@ void ShaderDebuggerDialog::SetName(uint64_t hash, std::string name) {
                            name.back() == '\r' || name.back() == '\n')) {
     name.pop_back();
   }
+  auto it = shader_entries_.find(hash);
   if (name.empty()) {
-    shader_names_.erase(hash);
+    if (it != shader_entries_.end()) {
+      it->second.name.clear();
+      // Drop the entry entirely if there's no other reason to keep it.
+      if (!it->second.disabled) {
+        shader_entries_.erase(it);
+      }
+    }
   } else {
-    shader_names_[hash] = std::move(name);
+    if (it == shader_entries_.end()) {
+      shader_entries_[hash] = ShaderTomlEntry{std::move(name), false};
+    } else {
+      it->second.name = std::move(name);
+    }
   }
-  SaveNamesToDisk();
+  SaveShadersToDisk();
+}
+
+void ShaderDebuggerDialog::SetDisabled(uint64_t hash, bool disabled) {
+  auto it = shader_entries_.find(hash);
+  if (it == shader_entries_.end()) {
+    if (disabled) {
+      shader_entries_[hash] = ShaderTomlEntry{std::string{}, true};
+      SaveShadersToDisk();
+    }
+    return;
+  }
+  if (it->second.disabled == disabled) return;
+  it->second.disabled = disabled;
+  // If the entry now has no name and no disable flag, drop it entirely.
+  if (!disabled && it->second.name.empty()) {
+    shader_entries_.erase(it);
+  }
+  SaveShadersToDisk();
 }
 
 namespace {
@@ -172,65 +207,177 @@ std::string UnescapeTomlString(const std::string& in) {
   return out;
 }
 
+// Strips leading/trailing ASCII whitespace from a string view.
+std::string_view TrimView(std::string_view s) {
+  size_t a = s.find_first_not_of(" \t\r\n");
+  if (a == std::string_view::npos) return {};
+  size_t b = s.find_last_not_of(" \t\r\n");
+  return s.substr(a, b - a + 1);
+}
+
+// Strips an inline TOML comment (an unquoted '#' through end of line) from
+// the value portion of a line. We do a naive scan that respects double-quoted
+// regions, which is enough for the inline-table values we emit.
+std::string StripCommentRespectingQuotes(std::string_view in) {
+  bool in_quote = false;
+  bool escape = false;
+  for (size_t i = 0; i < in.size(); ++i) {
+    char c = in[i];
+    if (escape) { escape = false; continue; }
+    if (in_quote) {
+      if (c == '\\') { escape = true; continue; }
+      if (c == '"') { in_quote = false; }
+    } else {
+      if (c == '"') { in_quote = true; }
+      else if (c == '#') { return std::string(in.substr(0, i)); }
+    }
+  }
+  return std::string(in);
+}
+
+// Parses a single inline-table value of the form `{ name = "x", disabled = true }`.
+// Missing keys default to empty/false. Returns false on a clearly malformed line.
+bool ParseInlineEntry(std::string_view value, std::string& out_name, bool& out_disabled) {
+  out_name.clear();
+  out_disabled = false;
+  std::string_view v = TrimView(value);
+  if (v.size() < 2 || v.front() != '{' || v.back() != '}') return false;
+  v = TrimView(v.substr(1, v.size() - 2));
+  // Walk comma-separated key=value pairs, respecting quoted strings.
+  size_t i = 0;
+  while (i < v.size()) {
+    // Find next '=' for the key.
+    size_t eq = v.find('=', i);
+    if (eq == std::string_view::npos) break;
+    std::string key(TrimView(v.substr(i, eq - i)));
+    // Find end of value: comma at top level (not inside quotes).
+    size_t j = eq + 1;
+    bool in_quote = false;
+    bool escape = false;
+    size_t end = v.size();
+    for (; j < v.size(); ++j) {
+      char c = v[j];
+      if (escape) { escape = false; continue; }
+      if (in_quote) {
+        if (c == '\\') { escape = true; continue; }
+        if (c == '"') in_quote = false;
+      } else {
+        if (c == '"') in_quote = true;
+        else if (c == ',') { end = j; break; }
+      }
+    }
+    std::string_view raw_value = TrimView(v.substr(eq + 1, end - eq - 1));
+    if (key == "name") {
+      if (raw_value.size() >= 2 && raw_value.front() == '"' && raw_value.back() == '"') {
+        out_name = UnescapeTomlString(std::string(raw_value.substr(1, raw_value.size() - 2)));
+      }
+    } else if (key == "disabled") {
+      out_disabled = (raw_value == "true");
+    }
+    if (end >= v.size()) break;
+    i = end + 1;
+  }
+  return true;
+}
+
+// Parses one shaders.toml line into (hash, name, disabled). Returns false if
+// the line is blank/comment/malformed. Accepts both the new inline-table
+// format and the legacy `"hash" = "name"` format from the previous revision.
+bool ParseShaderTomlLine(const std::string& line, uint64_t& out_hash,
+                         std::string& out_name, bool& out_disabled) {
+  out_name.clear();
+  out_disabled = false;
+  std::string_view sv = TrimView(line);
+  if (sv.empty() || sv.front() == '#') return false;
+  size_t eq = sv.find('=');
+  if (eq == std::string_view::npos) return false;
+  std::string key(TrimView(sv.substr(0, eq)));
+  // Accept bare or quoted hex hash key.
+  if (key.size() >= 2 && key.front() == '"' && key.back() == '"') {
+    key = key.substr(1, key.size() - 2);
+  }
+  if (key.empty()) return false;
+  uint64_t hash = 0;
+  if (std::sscanf(key.c_str(), "%llx",
+                  reinterpret_cast<unsigned long long*>(&hash)) != 1) {
+    return false;
+  }
+  std::string value_str = StripCommentRespectingQuotes(sv.substr(eq + 1));
+  std::string_view value = TrimView(value_str);
+  if (value.empty()) return false;
+  if (value.front() == '{') {
+    if (!ParseInlineEntry(value, out_name, out_disabled)) return false;
+  } else if (value.front() == '"') {
+    // Legacy format: just a quoted name, no disabled flag.
+    size_t close = value.find_last_of('"');
+    if (close == 0) return false;
+    out_name = UnescapeTomlString(std::string(value.substr(1, close - 1)));
+  } else {
+    return false;
+  }
+  out_hash = hash;
+  return true;
+}
+
 }  // namespace
 
-void ShaderDebuggerDialog::LoadNamesFromDisk() {
-  shader_names_.clear();
-  if (names_toml_path_.empty()) return;
-  std::ifstream in(names_toml_path_);
+void ShaderDebuggerDialog::LoadShadersFromDisk() {
+  shader_entries_.clear();
+  if (shaders_toml_path_.empty()) return;
+  std::ifstream in(shaders_toml_path_);
   if (!in) return;
   std::string line;
   while (std::getline(in, line)) {
-    // Strip leading whitespace and skip blanks/comments.
-    size_t start = line.find_first_not_of(" \t");
-    if (start == std::string::npos) continue;
-    if (line[start] == '#') continue;
-    // Find '=' separator.
-    size_t eq = line.find('=', start);
-    if (eq == std::string::npos) continue;
-    // Key: bare hex hash, optionally quoted.
-    std::string key = line.substr(start, eq - start);
-    while (!key.empty() && (key.back() == ' ' || key.back() == '\t')) key.pop_back();
-    if (!key.empty() && key.front() == '"' && key.back() == '"' && key.size() >= 2) {
-      key = key.substr(1, key.size() - 2);
-    }
-    // Value: quoted string.
-    size_t vstart = line.find_first_not_of(" \t", eq + 1);
-    if (vstart == std::string::npos) continue;
-    if (line[vstart] != '"') continue;
-    size_t vend = line.find_last_of('"');
-    if (vend <= vstart) continue;
-    std::string value = UnescapeTomlString(line.substr(vstart + 1, vend - vstart - 1));
-    if (key.empty() || value.empty()) continue;
     uint64_t hash = 0;
-    if (std::sscanf(key.c_str(), "%llx", reinterpret_cast<unsigned long long*>(&hash)) == 1) {
-      shader_names_[hash] = std::move(value);
-    }
+    std::string name;
+    bool disabled = false;
+    if (!ParseShaderTomlLine(line, hash, name, disabled)) continue;
+    if (name.empty() && !disabled) continue;
+    shader_entries_[hash] = ShaderTomlEntry{std::move(name), disabled};
   }
 }
 
-void ShaderDebuggerDialog::SaveNamesToDisk() const {
-  if (names_toml_path_.empty()) return;
+void ShaderDebuggerDialog::SaveShadersToDisk() const {
+  if (shaders_toml_path_.empty()) return;
   // Make sure the parent directory exists.
   std::error_code ec;
-  if (names_toml_path_.has_parent_path()) {
-    std::filesystem::create_directories(names_toml_path_.parent_path(), ec);
+  if (shaders_toml_path_.has_parent_path()) {
+    std::filesystem::create_directories(shaders_toml_path_.parent_path(), ec);
   }
-  std::ofstream out(names_toml_path_, std::ios::trunc);
+  std::ofstream out(shaders_toml_path_, std::ios::trunc);
   if (!out) return;
-  out << "# Per-shader documentation names. One entry per renamed shader.\n";
-  out << "# Format: \"<ucode_hash_hex>\" = \"<name>\"\n";
+  out << "# Per-shader settings.\n";
+  out << "# Format: <ucode_hash_hex> = { name = \"<name>\", disabled = <bool> }\n";
   // Sort by hash for stable diffs.
-  std::vector<std::pair<uint64_t, std::string>> ordered(shader_names_.begin(),
-                                                        shader_names_.end());
+  std::vector<std::pair<uint64_t, ShaderTomlEntry>> ordered(
+      shader_entries_.begin(), shader_entries_.end());
   std::sort(ordered.begin(), ordered.end(),
             [](const auto& a, const auto& b) { return a.first < b.first; });
   for (const auto& kv : ordered) {
+    if (kv.second.name.empty() && !kv.second.disabled) continue;
     char hash_buf[24];
     std::snprintf(hash_buf, sizeof(hash_buf), "%016llx",
                   static_cast<unsigned long long>(kv.first));
-    out << '"' << hash_buf << "\" = \"" << EscapeTomlString(kv.second) << "\"\n";
+    out << hash_buf << " = { name = \"" << EscapeTomlString(kv.second.name)
+        << "\", disabled = " << (kv.second.disabled ? "true" : "false") << " }\n";
   }
+}
+
+std::vector<uint64_t> ShaderDebuggerDialog::ReadShaderBlacklistFromToml(
+    const std::filesystem::path& path) {
+  std::vector<uint64_t> out;
+  if (path.empty()) return out;
+  std::ifstream in(path);
+  if (!in) return out;
+  std::string line;
+  while (std::getline(in, line)) {
+    uint64_t hash = 0;
+    std::string name;
+    bool disabled = false;
+    if (!ParseShaderTomlLine(line, hash, name, disabled)) continue;
+    if (disabled) out.push_back(hash);
+  }
+  return out;
 }
 
 void ShaderDebuggerDialog::RefreshSelectedDetails() {
@@ -333,25 +480,24 @@ void ShaderDebuggerDialog::DrawShaderTable() {
     }
   }
 
-  if (ImGui::Button("Enable all")) {    if (disable_setter_) {
-      for (const auto& e : cached_) {
-        if (e.disabled) {
-          disable_setter_(e.ucode_hash, false);
-        }
+  if (ImGui::Button("Enable all")) {
+    for (const auto& e : cached_) {
+      if (e.disabled) {
+        if (disable_setter_) disable_setter_(e.ucode_hash, false);
+        SetDisabled(e.ucode_hash, false);
       }
     }
   }
   ImGui::SameLine();
   if (ImGui::Button("Disable all visible")) {
-    if (disable_setter_) {
-      for (const auto& e : cached_) {
-        bool show_type = (e.type == 0 && show_vertex_) || (e.type == 1 && show_pixel_);
-        if (!show_type) continue;
-        if (show_only_active_ && !e.active) continue;
-        if (!MatchesFilter(e, filter_buf_)) continue;
-        if (!e.disabled) {
-          disable_setter_(e.ucode_hash, true);
-        }
+    for (const auto& e : cached_) {
+      bool show_type = (e.type == 0 && show_vertex_) || (e.type == 1 && show_pixel_);
+      if (!show_type) continue;
+      if (show_only_active_ && !e.active) continue;
+      if (!MatchesFilter(e, filter_buf_)) continue;
+      if (!e.disabled) {
+        if (disable_setter_) disable_setter_(e.ucode_hash, true);
+        SetDisabled(e.ucode_hash, true);
       }
     }
   }
@@ -471,6 +617,7 @@ void ShaderDebuggerDialog::DrawShaderTable() {
           if (disable_setter_) {
             disable_setter_(entry.ucode_hash, !enabled);
           }
+          SetDisabled(entry.ucode_hash, !enabled);
         }
 
         ImGui::TableSetColumnIndex(1);

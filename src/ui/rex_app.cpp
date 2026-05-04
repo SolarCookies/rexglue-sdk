@@ -276,7 +276,15 @@ bool ReXApp::OnInitialize() {
               if (!gs) return;
               auto* cp = gs->command_processor();
               if (!cp) return;
-              cp->SetShaderDisabledByHash(hash, disabled);
+              // Route through the persistent blacklist so the toggle also
+              // applies to future loads of the same shader, not just the one
+              // currently resident in the cache. Both AddShaderBlacklist and
+              // RemoveShaderBlacklist update already-loaded shaders too.
+              if (disabled) {
+                cp->AddShaderBlacklist(hash);
+              } else {
+                cp->RemoveShaderBlacklist(hash);
+              }
             };
             auto details_provider = [this](uint64_t hash) {
               ui::ShaderDebuggerDetails out;
