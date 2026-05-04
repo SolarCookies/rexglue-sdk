@@ -116,12 +116,37 @@ bool MnkInputDriver::IsEnabled() const {
   return REXCVAR_GET(mnk_mode);
 }
 
+// Cvar values may list multiple keys separated by ',' or '|' so a single
+// action can be bound to several physical inputs (e.g. "LMB,A"). Whitespace
+// around tokens is trimmed; empty tokens are ignored.
+template <typename Fn>
+static void ForEachBoundKey(const std::string& cvar_val, Fn&& fn) {
+  size_t i = 0;
+  while (i < cvar_val.size()) {
+    size_t j = cvar_val.find_first_of(",|", i);
+    if (j == std::string::npos) j = cvar_val.size();
+    size_t a = i, b = j;
+    while (a < b && (cvar_val[a] == ' ' || cvar_val[a] == '\t')) ++a;
+    while (b > a && (cvar_val[b - 1] == ' ' || cvar_val[b - 1] == '\t')) --b;
+    if (b > a) {
+      VirtualKey vk = rex::ui::ParseVirtualKey(std::string_view(cvar_val).substr(a, b - a));
+      if (vk != VirtualKey::kNone && fn(vk)) return;
+    }
+    i = (j == cvar_val.size()) ? j : j + 1;
+  }
+}
+
 static bool IsBindPressed(const bool (&key_down)[256], const std::string& cvar_val) {
-  VirtualKey vk = rex::ui::ParseVirtualKey(cvar_val);
-  if (vk == VirtualKey::kNone)
+  bool pressed = false;
+  ForEachBoundKey(cvar_val, [&](VirtualKey vk) {
+    uint16_t idx = static_cast<uint16_t>(vk);
+    if (idx < 256 && key_down[idx]) {
+      pressed = true;
+      return true;  // stop
+    }
     return false;
-  uint16_t idx = static_cast<uint16_t>(vk);
-  return idx < 256 && key_down[idx];
+  });
+  return pressed;
 }
 
 X_RESULT MnkInputDriver::GetCapabilities(uint32_t user_index, uint32_t flags,
@@ -278,7 +303,173 @@ void MnkInputDriver::EnqueueKeystroke(uint16_t vk_pad, bool down) {
   keystroke_queue_.push(ks);
 }
 
-void MnkInputDriver::CenterCursor() {
+// Apply a transition to a tracked pad slot. Down on a not-held slot emits
+// KEYDOWN and starts repeat timing; up on a held slot emits KEYUP. No-op
+// otherwise so duplicate edges from the OS auto-repeat path don't double-emit.
+void MnkInputDriver::HandleEdge(PadIdx idx, uint16_t vk_pad, bool down) {
+  auto& s = pad_states_[idx];
+  if (down && !s.held) {
+    auto now = std::chrono::steady_clock::now();
+    s.held = true;
+    s.vk_pad = vk_pad;
+    s.pressed_at = now;
+    s.last_event_at = now;
+    EnqueueKeystroke(vk_pad, X_INPUT_KEYSTROKE_KEYDOWN);
+  } else if (!down && s.held) {
+    s.held = false;
+    EnqueueKeystroke(s.vk_pad, X_INPUT_KEYSTROKE_KEYUP);
+  }
+}
+
+// Apply a stick-direction change. Releases the prior direction (if any) and
+// presses the new one. kNone clears without emitting a press.
+void MnkInputDriver::HandleStickDirChange(PadIdx idx, uint16_t new_dir) {
+  auto& s = pad_states_[idx];
+  if (new_dir == s.vk_pad)
+    return;
+  if (s.held) {
+    EnqueueKeystroke(s.vk_pad, X_INPUT_KEYSTROKE_KEYUP);
+    s.held = false;
+  }
+  s.vk_pad = new_dir;
+  if (new_dir != static_cast<uint16_t>(VirtualKey::kNone)) {
+    auto now = std::chrono::steady_clock::now();
+    s.held = true;
+    s.pressed_at = now;
+    s.last_event_at = now;
+    EnqueueKeystroke(new_dir, X_INPUT_KEYSTROKE_KEYDOWN);
+  }
+}
+
+// Walk the keybind cvars for buttons and triggers; for any whose bound key
+// matches key_vk, apply a HandleEdge. Stick directions are handled separately
+// in RecomputeLstickDir because a single direction can depend on multiple
+// keys held at once.
+void MnkInputDriver::EmitButtonChange(VirtualKey key_vk, bool down) {
+  auto try_match = [this, key_vk, down](const std::string& cvar_val, PadIdx idx,
+                                        VirtualKey vk_pad) {
+    bool matched = false;
+    ForEachBoundKey(cvar_val, [&](VirtualKey vk) {
+      if (vk == key_vk) {
+        matched = true;
+        return true;  // stop
+      }
+      return false;
+    });
+    if (matched) {
+      HandleEdge(idx, static_cast<uint16_t>(vk_pad), down);
+    }
+  };
+  try_match(REXCVAR_GET(keybind_a), kPadIdxA, VirtualKey::kXInputPadA);
+  try_match(REXCVAR_GET(keybind_b), kPadIdxB, VirtualKey::kXInputPadB);
+  try_match(REXCVAR_GET(keybind_x), kPadIdxX, VirtualKey::kXInputPadX);
+  try_match(REXCVAR_GET(keybind_y), kPadIdxY, VirtualKey::kXInputPadY);
+  try_match(REXCVAR_GET(keybind_left_shoulder), kPadIdxLB, VirtualKey::kXInputPadLShoulder);
+  try_match(REXCVAR_GET(keybind_right_shoulder), kPadIdxRB, VirtualKey::kXInputPadRShoulder);
+  try_match(REXCVAR_GET(keybind_start), kPadIdxStart, VirtualKey::kXInputPadStart);
+  try_match(REXCVAR_GET(keybind_back), kPadIdxBack, VirtualKey::kXInputPadBack);
+  try_match(REXCVAR_GET(keybind_lstick_press), kPadIdxL3, VirtualKey::kXInputPadLThumbPress);
+  try_match(REXCVAR_GET(keybind_rstick_press), kPadIdxR3, VirtualKey::kXInputPadRThumbPress);
+  try_match(REXCVAR_GET(keybind_dpad_up), kPadIdxDU, VirtualKey::kXInputPadDpadUp);
+  try_match(REXCVAR_GET(keybind_dpad_down), kPadIdxDD, VirtualKey::kXInputPadDpadDown);
+  try_match(REXCVAR_GET(keybind_dpad_left), kPadIdxDL, VirtualKey::kXInputPadDpadLeft);
+  try_match(REXCVAR_GET(keybind_dpad_right), kPadIdxDR, VirtualKey::kXInputPadDpadRight);
+  try_match(REXCVAR_GET(keybind_left_trigger), kPadIdxLT, VirtualKey::kXInputPadLTrigger);
+  try_match(REXCVAR_GET(keybind_right_trigger), kPadIdxRT, VirtualKey::kXInputPadRTrigger);
+  // Guide is intentionally omitted: standard XInput keystroke spec has no
+  // VK_PAD_GUIDE; the bit lives only in XInputGetStateEx's state.
+}
+
+// Recompute composite left-stick direction from currently-held WASD-style
+// keys and emit transition keystrokes if the direction changed. Cheap to
+// always call from key event handlers - early-outs if direction matches.
+void MnkInputDriver::RecomputeLstickDir() {
+  bool up = IsBindPressed(key_down_, REXCVAR_GET(keybind_lstick_up));
+  bool dn = IsBindPressed(key_down_, REXCVAR_GET(keybind_lstick_down));
+  bool lf = IsBindPressed(key_down_, REXCVAR_GET(keybind_lstick_left));
+  bool rt = IsBindPressed(key_down_, REXCVAR_GET(keybind_lstick_right));
+
+  uint16_t dir = static_cast<uint16_t>(VirtualKey::kNone);
+  if (up && rt)
+    dir = static_cast<uint16_t>(VirtualKey::kXInputPadLThumbUpRight);
+  else if (up && lf)
+    dir = static_cast<uint16_t>(VirtualKey::kXInputPadLThumbUpLeft);
+  else if (dn && rt)
+    dir = static_cast<uint16_t>(VirtualKey::kXInputPadLThumbDownRight);
+  else if (dn && lf)
+    dir = static_cast<uint16_t>(VirtualKey::kXInputPadLThumbDownLeft);
+  else if (up)
+    dir = static_cast<uint16_t>(VirtualKey::kXInputPadLThumbUp);
+  else if (dn)
+    dir = static_cast<uint16_t>(VirtualKey::kXInputPadLThumbDown);
+  else if (rt)
+    dir = static_cast<uint16_t>(VirtualKey::kXInputPadLThumbRight);
+  else if (lf)
+    dir = static_cast<uint16_t>(VirtualKey::kXInputPadLThumbLeft);
+
+  HandleStickDirChange(kPadIdxLStick, dir);
+}
+
+// Right stick is mouse-driven and continuous. By default we skip emission to
+// avoid noising the queue during normal aiming. Opt-in via mnk_emit_rstick_keystrokes
+// for titles whose menus respond to right-stick keystrokes; threshold-based
+// classification turns the analog deflection into 9 discrete states with the
+// same transition semantics as the left stick.
+void MnkInputDriver::EnqueueRStickIfChanged(int16_t rx, int16_t ry) {
+  if (!REXCVAR_GET(mnk_emit_rstick_keystrokes)) {
+    return;
+  }
+  // ~25% of full deflection so jitter under aiming doesn't toggle directions.
+  constexpr int16_t kThreshold = 8192;
+  bool up = ry > kThreshold;
+  bool dn = ry < -kThreshold;
+  bool lf = rx < -kThreshold;
+  bool rt = rx > kThreshold;
+
+  uint16_t dir = static_cast<uint16_t>(VirtualKey::kNone);
+  if (up && rt)
+    dir = static_cast<uint16_t>(VirtualKey::kXInputPadRThumbUpRight);
+  else if (up && lf)
+    dir = static_cast<uint16_t>(VirtualKey::kXInputPadRThumbUpLeft);
+  else if (dn && rt)
+    dir = static_cast<uint16_t>(VirtualKey::kXInputPadRThumbDownRight);
+  else if (dn && lf)
+    dir = static_cast<uint16_t>(VirtualKey::kXInputPadRThumbDownLeft);
+  else if (up)
+    dir = static_cast<uint16_t>(VirtualKey::kXInputPadRThumbUp);
+  else if (dn)
+    dir = static_cast<uint16_t>(VirtualKey::kXInputPadRThumbDown);
+  else if (rt)
+    dir = static_cast<uint16_t>(VirtualKey::kXInputPadRThumbRight);
+  else if (lf)
+    dir = static_cast<uint16_t>(VirtualKey::kXInputPadRThumbLeft);
+
+  HandleStickDirChange(kPadIdxRStick, dir);
+}
+
+// Walk currently-held pad slots and emit XINPUT_KEYSTROKE_REPEAT events at
+// the configured rate after the initial delay. Called from both GetState and
+// GetKeystroke so titles that poll either path see repeat events.
+void MnkInputDriver::TickRepeats() {
+  if (!IsEnabled() || !has_focus_) {
+    return;
+  }
+  auto now = std::chrono::steady_clock::now();
+  auto delay = std::chrono::milliseconds(REXCVAR_GET(mnk_keystroke_repeat_delay_ms));
+  auto rate = std::chrono::milliseconds(REXCVAR_GET(mnk_keystroke_repeat_rate_ms));
+  for (auto& s : pad_states_) {
+    if (!s.held)
+      continue;
+    if (now - s.pressed_at < delay)
+      continue;
+    if (now - s.last_event_at < rate)
+      continue;
+    EnqueueKeystroke(s.vk_pad, X_INPUT_KEYSTROKE_REPEAT);
+    s.last_event_at = now;
+  }
+}
+
+void MnkInputDriver::CenterCursor()
   if (!attached_window_)
     return;
   int32_t cx = static_cast<int32_t>(attached_window_->GetActualLogicalWidth() / 2);
@@ -381,6 +572,12 @@ void MnkInputDriver::OnMouseDown(rex::ui::MouseEvent& e) {
     case rex::ui::MouseEvent::Button::kMiddle:
       SetKeyState(static_cast<uint16_t>(VirtualKey::kMButton), true);
       break;
+    case rex::ui::MouseEvent::Button::kX1:
+      vk = VirtualKey::kXButton1;
+      break;
+    case rex::ui::MouseEvent::Button::kX2:
+      vk = VirtualKey::kXButton2;
+      break;
     default:
       break;
   }
@@ -400,6 +597,12 @@ void MnkInputDriver::OnMouseUp(rex::ui::MouseEvent& e) {
       break;
     case rex::ui::MouseEvent::Button::kMiddle:
       SetKeyState(static_cast<uint16_t>(VirtualKey::kMButton), false);
+      break;
+    case rex::ui::MouseEvent::Button::kX1:
+      vk = VirtualKey::kXButton1;
+      break;
+    case rex::ui::MouseEvent::Button::kX2:
+      vk = VirtualKey::kXButton2;
       break;
     default:
       return;
