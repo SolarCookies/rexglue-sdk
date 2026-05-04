@@ -127,12 +127,37 @@ bool MnkInputDriver::IsEnabled() const {
   return REXCVAR_GET(mnk_mode);
 }
 
+// Cvar values may list multiple keys separated by ',' or '|' so a single
+// action can be bound to several physical inputs (e.g. "LMB,A"). Whitespace
+// around tokens is trimmed; empty tokens are ignored.
+template <typename Fn>
+static void ForEachBoundKey(const std::string& cvar_val, Fn&& fn) {
+  size_t i = 0;
+  while (i < cvar_val.size()) {
+    size_t j = cvar_val.find_first_of(",|", i);
+    if (j == std::string::npos) j = cvar_val.size();
+    size_t a = i, b = j;
+    while (a < b && (cvar_val[a] == ' ' || cvar_val[a] == '\t')) ++a;
+    while (b > a && (cvar_val[b - 1] == ' ' || cvar_val[b - 1] == '\t')) --b;
+    if (b > a) {
+      VirtualKey vk = rex::ui::ParseVirtualKey(std::string_view(cvar_val).substr(a, b - a));
+      if (vk != VirtualKey::kNone && fn(vk)) return;
+    }
+    i = (j == cvar_val.size()) ? j : j + 1;
+  }
+}
+
 static bool IsBindPressed(const bool (&key_down)[256], const std::string& cvar_val) {
-  VirtualKey vk = rex::ui::ParseVirtualKey(cvar_val);
-  if (vk == VirtualKey::kNone)
+  bool pressed = false;
+  ForEachBoundKey(cvar_val, [&](VirtualKey vk) {
+    uint16_t idx = static_cast<uint16_t>(vk);
+    if (idx < 256 && key_down[idx]) {
+      pressed = true;
+      return true;  // stop
+    }
     return false;
-  uint16_t idx = static_cast<uint16_t>(vk);
-  return idx < 256 && key_down[idx];
+  });
+  return pressed;
 }
 
 X_RESULT MnkInputDriver::GetCapabilities(uint32_t user_index, uint32_t flags,
@@ -343,7 +368,15 @@ void MnkInputDriver::HandleStickDirChange(PadIdx idx, uint16_t new_dir) {
 void MnkInputDriver::EmitButtonChange(VirtualKey key_vk, bool down) {
   auto try_match = [this, key_vk, down](const std::string& cvar_val, PadIdx idx,
                                         VirtualKey vk_pad) {
-    if (rex::ui::ParseVirtualKey(cvar_val) == key_vk) {
+    bool matched = false;
+    ForEachBoundKey(cvar_val, [&](VirtualKey vk) {
+      if (vk == key_vk) {
+        matched = true;
+        return true;  // stop
+      }
+      return false;
+    });
+    if (matched) {
       HandleEdge(idx, static_cast<uint16_t>(vk_pad), down);
     }
   };
@@ -569,6 +602,12 @@ void MnkInputDriver::OnMouseDown(rex::ui::MouseEvent& e) {
     case rex::ui::MouseEvent::Button::kMiddle:
       vk = VirtualKey::kMButton;
       break;
+    case rex::ui::MouseEvent::Button::kX1:
+      vk = VirtualKey::kXButton1;
+      break;
+    case rex::ui::MouseEvent::Button::kX2:
+      vk = VirtualKey::kXButton2;
+      break;
     default:
       return;
   }
@@ -596,6 +635,12 @@ void MnkInputDriver::OnMouseUp(rex::ui::MouseEvent& e) {
       break;
     case rex::ui::MouseEvent::Button::kMiddle:
       vk = VirtualKey::kMButton;
+      break;
+    case rex::ui::MouseEvent::Button::kX1:
+      vk = VirtualKey::kXButton1;
+      break;
+    case rex::ui::MouseEvent::Button::kX2:
+      vk = VirtualKey::kXButton2;
       break;
     default:
       return;
