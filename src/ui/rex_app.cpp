@@ -205,6 +205,20 @@ bool ReXApp::OnInitialize() {
 
   // Setup graphics presenter and ImGui
   auto* graphics_system = static_cast<rex::graphics::GraphicsSystem*>(runtime_->graphics_system());
+
+  // Apply persistent shader blacklist from shaders.toml so disabled shaders
+  // are skipped from the very first draw, without requiring the user to open
+  // the F2 shader debugger overlay first.
+  if (graphics_system) {
+    if (auto* cp = graphics_system->command_processor()) {
+      auto blacklist = ui::ShaderDebuggerDialog::ReadShaderBlacklistFromToml(
+          std::filesystem::path("shaders.toml"));
+      for (uint64_t hash : blacklist) {
+        cp->AddShaderBlacklist(hash);
+      }
+    }
+  }
+
   if (graphics_system && graphics_system->presenter()) {
     auto* presenter = graphics_system->presenter();
     auto* provider = graphics_system->provider();

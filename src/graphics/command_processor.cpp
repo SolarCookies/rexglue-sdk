@@ -270,6 +270,48 @@ std::vector<uint64_t> CommandProcessor::GetShaderBlacklist() const {
   return std::vector<uint64_t>(shader_blacklist_.begin(), shader_blacklist_.end());
 }
 
+bool CommandProcessor::ReplaceShaderHLSL(uint64_t ucode_hash, std::string_view source,
+                                         std::string_view entry_point,
+                                         std::string_view target_profile,
+                                         std::string* out_error,
+                                         size_t* out_replaced_count) {
+  if (out_replaced_count) {
+    *out_replaced_count = 0;
+  }
+  ShaderDetails details = GetShaderDetails(ucode_hash);
+  if (!details.found) {
+    if (out_error) {
+      *out_error = "Shader hash not loaded by the GPU yet.";
+    }
+    return false;
+  }
+  if (details.translations.empty()) {
+    if (out_error) {
+      *out_error = "Shader has no translations to replace.";
+    }
+    return false;
+  }
+  size_t replaced = 0;
+  std::string per_call_error;
+  std::string last_error;
+  for (const auto& tr : details.translations) {
+    if (ReplaceShaderTranslationHLSL(ucode_hash, tr.modification, source, entry_point,
+                                     target_profile, &per_call_error)) {
+      ++replaced;
+    } else if (!per_call_error.empty()) {
+      last_error = per_call_error;
+    }
+  }
+  if (out_replaced_count) {
+    *out_replaced_count = replaced;
+  }
+  if (replaced == 0 && out_error) {
+    *out_error = last_error.empty() ? std::string("All translation replacements failed.")
+                                    : last_error;
+  }
+  return replaced > 0;
+}
+
 ReadbackResolveMode CommandProcessor::GetReadbackResolveMode(
     bool legacy_readback_resolve_enabled) const {
   ReadbackResolveMode shared_mode = ParseReadbackResolveMode(REXCVAR_GET(readback_resolve));

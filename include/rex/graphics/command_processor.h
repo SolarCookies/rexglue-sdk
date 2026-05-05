@@ -19,6 +19,7 @@
 #include <mutex>
 #include <queue>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -166,6 +167,42 @@ class CommandProcessor {
     (void)binary;
     return false;
   }
+
+  // Compiles HLSL source on the host, then forwards the resulting bytecode to
+  // ReplaceShaderTranslationBinary for one (shader, modification) pair. The
+  // backend chooses the compiler (e.g. D3DCompile for D3D12). Pass an empty
+  // `entry_point` to use the backend default ("main") and an empty
+  // `target_profile` to let the backend infer it from the shader type
+  // (vs_5_1 / ps_5_1 for D3D12). Returns true if compilation and replacement
+  // both succeeded. Default does nothing -- backends override.
+  virtual bool ReplaceShaderTranslationHLSL(uint64_t ucode_hash, uint64_t modification,
+                                            std::string_view source,
+                                            std::string_view entry_point = {},
+                                            std::string_view target_profile = {},
+                                            std::string* out_error = nullptr) {
+    (void)ucode_hash;
+    (void)modification;
+    (void)source;
+    (void)entry_point;
+    (void)target_profile;
+    if (out_error) {
+      *out_error = "HLSL replacement not supported by this backend.";
+    }
+    return false;
+  }
+
+  // Convenience: compile HLSL once and apply it to *every* translation
+  // (modification permutation) currently associated with `ucode_hash`. This is
+  // what most callers want when they don't care about modification keys -- the
+  // common "swap this shader by hash" workflow. Walks GetShaderDetails() to
+  // enumerate modifications and forwards each one through
+  // ReplaceShaderTranslationHLSL. Returns true if at least one translation was
+  // successfully replaced; sets *out_replaced_count if non-null.
+  bool ReplaceShaderHLSL(uint64_t ucode_hash, std::string_view source,
+                         std::string_view entry_point = {},
+                         std::string_view target_profile = {},
+                         std::string* out_error = nullptr,
+                         size_t* out_replaced_count = nullptr);
 
   // Permanently disable a shader by ucode hash. The hash is remembered even if
   // the shader hasn't been seen yet -- when the backend later loads a shader
