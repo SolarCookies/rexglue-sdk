@@ -149,6 +149,22 @@ bool D3D12CommandProcessor::ReplaceShaderTranslationBinary(uint64_t ucode_hash,
                                                           std::move(binary));
 }
 
+bool D3D12CommandProcessor::ReplaceShaderTranslationHLSL(uint64_t ucode_hash,
+                                                         uint64_t modification,
+                                                         std::string_view source,
+                                                         std::string_view entry_point,
+                                                         std::string_view target_profile,
+                                                         std::string* out_error) {
+  if (!pipeline_cache_) {
+    if (out_error) {
+      *out_error = "Pipeline cache not initialized.";
+    }
+    return false;
+  }
+  return pipeline_cache_->ReplaceShaderTranslationHLSL(
+      ucode_hash, modification, source, entry_point, target_profile, out_error);
+}
+
 void D3D12CommandProcessor::ResetShaderProfiling() {
   if (!pipeline_cache_) {
     return;

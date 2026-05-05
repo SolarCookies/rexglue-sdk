@@ -49,6 +49,16 @@
 #include <rex/types.h>
 #include <rex/ui/d3d12/d3d12_util.h>
 
+// d3dcompiler.h transitively includes <windows.h>; rex headers above already
+// handle NOMINMAX, but include this one last so any local re-#define of
+// min/max from windows.h cannot poison preceding standard library template
+// uses (e.g. std::numeric_limits<T>::max()).
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <d3dcompiler.h>
+#include <wrl/client.h>
+
 REXCVAR_DEFINE_BOOL(d3d12_dxbc_disasm, false, "GPU/D3D12", "Dump DXBC disassembly");
 
 REXCVAR_DEFINE_BOOL(d3d12_dxbc_disasm_dxilconv, false, "GPU/D3D12",
@@ -963,6 +973,75 @@ bool PipelineCache::ReplaceShaderTranslationBinary(uint64_t ucode_hash, uint64_t
     COUNT_profile_set("gpu/pipeline_cache/pipelines", pipelines_.size());
   });
   return true;
+}
+
+bool PipelineCache::ReplaceShaderTranslationHLSL(uint64_t ucode_hash, uint64_t modification,
+                                                 std::string_view source,
+                                                 std::string_view entry_point,
+                                                 std::string_view target_profile,
+                                                 std::string* out_error) {
+  // Look up the shader to verify the hash exists and pick a default target
+  // profile from the shader stage if the caller didn't supply one.
+  xenos::ShaderType stage = xenos::ShaderType::kVertex;
+  {
+    std::lock_guard<std::mutex> lock(shaders_mutex_);
+    auto it = shaders_.find(ucode_hash);
+    if (it == shaders_.end() || !it->second) {
+      if (out_error) {
+        *out_error = "Shader hash not loaded by the GPU yet.";
+      }
+      return false;
+    }
+    stage = it->second->type();
+  }
+
+  std::string entry_storage(entry_point);
+  if (entry_storage.empty()) {
+    entry_storage = "main";
+  }
+  std::string profile_storage(target_profile);
+  if (profile_storage.empty()) {
+    profile_storage = (stage == xenos::ShaderType::kPixel) ? "ps_5_1" : "vs_5_1";
+  }
+
+  // Compile HLSL -> DXBC. The translator's PSO build will run a separate
+  // DXBC->DXIL conversion later (see d3d12/shader.cpp), so SM 5.1 is fine.
+  Microsoft::WRL::ComPtr<ID3DBlob> code_blob;
+  Microsoft::WRL::ComPtr<ID3DBlob> error_blob;
+  UINT flags = D3DCOMPILE_ENABLE_STRICTNESS;
+#if !defined(NDEBUG)
+  flags |= D3DCOMPILE_DEBUG | D3DCOMPILE_SKIP_OPTIMIZATION;
+#else
+  flags |= D3DCOMPILE_OPTIMIZATION_LEVEL3;
+#endif
+  HRESULT hr = D3DCompile(source.data(), source.size(),
+                          /*pSourceName*/ nullptr,
+                          /*pDefines*/ nullptr,
+                          /*pInclude*/ D3D_COMPILE_STANDARD_FILE_INCLUDE,
+                          entry_storage.c_str(), profile_storage.c_str(), flags, 0,
+                          &code_blob, &error_blob);
+  if (FAILED(hr) || !code_blob) {
+    if (out_error) {
+      if (error_blob && error_blob->GetBufferSize() > 0) {
+        *out_error = std::string(static_cast<const char*>(error_blob->GetBufferPointer()),
+                                 error_blob->GetBufferSize());
+      } else {
+        *out_error = fmt::format("D3DCompile failed (HRESULT 0x{:08X}).",
+                                 static_cast<uint32_t>(hr));
+      }
+    }
+    REXGPU_ERROR("HLSL replacement for shader {:016X} mod {:016X} failed: {}", ucode_hash,
+                 modification,
+                 (error_blob && error_blob->GetBufferSize() > 0)
+                     ? static_cast<const char*>(error_blob->GetBufferPointer())
+                     : "(no diagnostic)");
+    return false;
+  }
+
+  std::vector<uint8_t> binary(static_cast<const uint8_t*>(code_blob->GetBufferPointer()),
+                              static_cast<const uint8_t*>(code_blob->GetBufferPointer()) +
+                                  code_blob->GetBufferSize());
+  return ReplaceShaderTranslationBinary(ucode_hash, modification, std::move(binary));
 }
 
 DxbcShaderTranslator::Modification PipelineCache::GetCurrentVertexShaderModification(

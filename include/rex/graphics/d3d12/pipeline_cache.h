@@ -20,6 +20,7 @@
 #include <mutex>
 #include <queue>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <unordered_map>
 #include <utility>
@@ -85,6 +86,16 @@ class PipelineCache {
   // drops any cached pipelines that referenced the previous binary.
   bool ReplaceShaderTranslationBinary(uint64_t ucode_hash, uint64_t modification,
                                       std::vector<uint8_t> binary);
+  // Compiles HLSL source to DXBC via D3DCompile and forwards to
+  // ReplaceShaderTranslationBinary. Empty `entry_point` defaults to "main";
+  // empty `target_profile` is inferred from the shader type (vs_5_1 / ps_5_1).
+  // Returns true on success; on failure, *out_error (if non-null) gets the
+  // compiler diagnostic.
+  bool ReplaceShaderTranslationHLSL(uint64_t ucode_hash, uint64_t modification,
+                                    std::string_view source,
+                                    std::string_view entry_point,
+                                    std::string_view target_profile,
+                                    std::string* out_error);
   // Resets per-shader profiling counters across every tracked shader.
   void ResetShaderProfiling();
 

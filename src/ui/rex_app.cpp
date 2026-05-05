@@ -266,7 +266,26 @@ bool ReXApp::SetupPresentation() {
   }
   window_->Open();
 
-  auto* graphics_system = static_cast<rex::graphics::GraphicsSystem*>(config_.graphics.get());
+// Always expose the window to the runtime so hooks (native rendering, etc.)
+// can obtain the native handle even when the SDK graphics system is disabled.
+runtime_->set_display_window(window_.get());
+
+// Setup graphics presenter and ImGui
+auto* graphics_system = static_cast<rex::graphics::GraphicsSystem*>(runtime_->graphics_system());
+
+// Apply persistent shader blacklist from shaders.toml so disabled shaders
+// are skipped from the very first draw, without requiring the user to open
+// the F2 shader debugger overlay first.
+if (graphics_system) {
+  if (auto* cp = graphics_system->command_processor()) {
+    auto blacklist = ui::ShaderDebuggerDialog::ReadShaderBlacklistFromToml(
+        std::filesystem::path("shaders.toml"));
+    for (uint64_t hash : blacklist) {
+      cp->AddShaderBlacklist(hash);
+    }
+  }
+}
+
   if (graphics_system && graphics_system->presenter()) {
     auto* presenter = graphics_system->presenter();
     auto* provider = graphics_system->provider();
