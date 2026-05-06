@@ -1034,6 +1034,12 @@ void Win32Window::AutoHideCursorTimerCallback(void* parameter, BOOLEAN timer_or_
 LRESULT Win32Window::WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) {
   if (message >= WM_MOUSEFIRST && message <= WM_MOUSELAST) {
     WindowDestructionReceiver destruction_receiver(this);
+    if (!HasFocus() && GetFocus() == hwnd_) {
+      OnFocusUpdate(true, destruction_receiver);
+      if (destruction_receiver.IsWindowDestroyedOrClosed()) {
+        return 0;
+      }
+    }
     // Returning immediately anyway - no need to check
     // destruction_receiver.IsWindowDestroyed() afterwards.
     return HandleMouse(message, wParam, lParam, destruction_receiver)
@@ -1042,6 +1048,12 @@ LRESULT Win32Window::WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lPar
   }
   if (message >= WM_KEYFIRST && message <= WM_KEYLAST) {
     WindowDestructionReceiver destruction_receiver(this);
+    if (!HasFocus() && GetFocus() == hwnd_) {
+      OnFocusUpdate(true, destruction_receiver);
+      if (destruction_receiver.IsWindowDestroyedOrClosed()) {
+        return 0;
+      }
+    }
     // Returning immediately anyway - no need to check
     // destruction_receiver.IsWindowDestroyed() afterwards.
     return HandleKeyboard(message, wParam, lParam, destruction_receiver)
@@ -1177,6 +1189,30 @@ LRESULT Win32Window::WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lPar
         if (destruction_receiver.IsWindowDestroyedOrClosed()) {
           break;
         }
+      }
+    } break;
+
+    case WM_ACTIVATE: {
+      WindowDestructionReceiver destruction_receiver(this);
+      bool active = LOWORD(wParam) != WA_INACTIVE;
+      OnFocusUpdate(active, destruction_receiver);
+      if (destruction_receiver.IsWindowDestroyedOrClosed()) {
+        break;
+      }
+      if (active && IsMouseCaptureRequested()) {
+        ApplyNewMouseCapture();
+      }
+    } break;
+
+    case WM_ACTIVATEAPP: {
+      WindowDestructionReceiver destruction_receiver(this);
+      bool active = wParam != 0;
+      OnFocusUpdate(active, destruction_receiver);
+      if (destruction_receiver.IsWindowDestroyedOrClosed()) {
+        break;
+      }
+      if (active && IsMouseCaptureRequested()) {
+        ApplyNewMouseCapture();
       }
     } break;
 

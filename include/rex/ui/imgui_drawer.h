@@ -36,7 +36,7 @@ namespace ui {
 class ImGuiDialog;
 class Window;
 
-class ImGuiDrawer : public WindowInputListener, public UIDrawer {
+class ImGuiDrawer : public WindowInputListener, public WindowListener, public UIDrawer {
  public:
   using FontSetupCallback = std::function<void(ImFontAtlas*)>;
   ImGuiDrawer(Window* window, size_t z_order, FontSetupCallback font_setup = nullptr);
@@ -67,6 +67,7 @@ class ImGuiDrawer : public WindowInputListener, public UIDrawer {
   void OnMouseUp(MouseEvent& e) override;
   void OnMouseWheel(MouseEvent& e) override;
   void OnTouchEvent(TouchEvent& e) override;
+  void OnLostFocus(UISetupEvent& e) override;
   // For now, no need for OnDpiChanged because redrawing is done continuously.
 
  private:
