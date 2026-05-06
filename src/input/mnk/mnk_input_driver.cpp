@@ -30,6 +30,10 @@ REXCVAR_DEFINE_BOOL(mnk_mode, false, "Input", "Enable keyboard/mouse controller 
 REXCVAR_DEFINE_INT32(mnk_user_index, 0, "Input", "Controller slot (0-3) for MnK").range(0, 3);
 REXCVAR_DEFINE_DOUBLE(mnk_sensitivity, 1.0, "Input", "Mouse sensitivity for right stick")
     .range(0.01, 10.0);
+REXCVAR_DEFINE_DOUBLE(mnk_lstick_scale, 1.0, "Input", "Keyboard left stick scale")
+    .range(0.1, 1.0);
+REXCVAR_DEFINE_DOUBLE(mnk_lstick_walk_scale, 0.35, "Input", "Keyboard left stick walk scale")
+    .range(0.05, 1.0);
 REXCVAR_DEFINE_INT32(mnk_keystroke_repeat_delay_ms, 250, "Input",
                      "Delay before keystroke repeat starts (ms)")
     .range(50, 2000);
@@ -55,6 +59,8 @@ REXCVAR_DEFINE_STRING(keybind_lstick_down, "S", "Input/Keybinds/Controller", "Le
 REXCVAR_DEFINE_STRING(keybind_lstick_left, "A", "Input/Keybinds/Controller", "Left stick left");
 REXCVAR_DEFINE_STRING(keybind_lstick_right, "D", "Input/Keybinds/Controller", "Left stick right");
 REXCVAR_DEFINE_STRING(keybind_lstick_press, "C", "Input/Keybinds/Controller", "Left stick press");
+REXCVAR_DEFINE_STRING(keybind_lstick_walk, "Control", "Input/Keybinds/Controller",
+                      "Left stick walk modifier");
 REXCVAR_DEFINE_STRING(keybind_rstick_press, "MMB", "Input/Keybinds/Controller",
                       "Right stick press");
 REXCVAR_DEFINE_STRING(keybind_dpad_up, "Up", "Input/Keybinds/Controller", "D-pad up");
@@ -247,6 +253,21 @@ X_RESULT MnkInputDriver::GetState(uint32_t user_index, X_INPUT_STATE* out_state)
     ly += INT16_MAX;
   if (IsBindPressed(key_down_, REXCVAR_GET(keybind_lstick_down)))
     ly -= INT16_MAX;
+
+  if (lx || ly) {
+    double mag = std::sqrt(static_cast<double>(lx) * lx + static_cast<double>(ly) * ly);
+    if (mag > INT16_MAX) {
+      double scale = static_cast<double>(INT16_MAX) / mag;
+      lx = static_cast<int32_t>(std::round(static_cast<double>(lx) * scale));
+      ly = static_cast<int32_t>(std::round(static_cast<double>(ly) * scale));
+    }
+
+    double scale = IsBindPressed(key_down_, REXCVAR_GET(keybind_lstick_walk))
+                       ? REXCVAR_GET(mnk_lstick_walk_scale)
+                       : REXCVAR_GET(mnk_lstick_scale);
+    lx = static_cast<int32_t>(std::round(static_cast<double>(lx) * scale));
+    ly = static_cast<int32_t>(std::round(static_cast<double>(ly) * scale));
+  }
 
   double sensitivity = REXCVAR_GET(mnk_sensitivity);
   constexpr double kBaseScale = 200.0;
@@ -667,19 +688,29 @@ void MnkInputDriver::OnMouseMove(rex::ui::MouseEvent& e) {
 }
 
 void MnkInputDriver::OnLostFocus(rex::ui::UISetupEvent&) {
-  std::lock_guard lock(state_mutex_);
-  has_focus_ = false;
-  ResetInputState();
-  if (mouse_captured_ && attached_window_) {
-    mouse_captured_ = false;
+  bool release_mouse = false;
+  {
+    std::lock_guard lock(state_mutex_);
+    has_focus_ = false;
+    ResetInputState();
+    if (mouse_captured_) {
+      mouse_captured_ = false;
+      release_mouse = true;
+    }
+  }
+  if (release_mouse && attached_window_) {
     attached_window_->SetCursorVisibility(rex::ui::Window::CursorVisibility::kVisible);
     attached_window_->ReleaseMouse();
   }
 }
 
 void MnkInputDriver::OnGotFocus(rex::ui::UISetupEvent&) {
-  std::lock_guard lock(state_mutex_);
-  has_focus_ = true;
+  {
+    std::lock_guard lock(state_mutex_);
+    has_focus_ = true;
+    ResetInputState();
+  }
+  UpdateMouseCapture();
 }
 
 }  // namespace rex::input::mnk

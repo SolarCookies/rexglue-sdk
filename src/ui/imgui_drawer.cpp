@@ -43,6 +43,7 @@ ImGuiDrawer::~ImGuiDrawer() {
   SetPresenter(nullptr);
   if (!dialogs_.empty()) {
     window_->RemoveInputListener(this);
+    window_->RemoveListener(this);
     if (internal_state_) {
       ImGui::SetCurrentContext(internal_state_);
       if (touch_pointer_id_ == TouchEvent::kPointerIDNone && ImGui::IsAnyMouseDown()) {
@@ -68,6 +69,7 @@ void ImGuiDrawer::AddDialog(ImGuiDialog* dialog) {
     // a dialog's Draw function, re-registering the ImGuiDrawer may result in
     // ImGui being drawn multiple times in the current frame.
     window_->AddInputListener(this, z_order_);
+    window_->AddListener(this);
     if (presenter_) {
       presenter_->AddUIDrawerFromUIThread(this, z_order_);
     }
@@ -568,6 +570,8 @@ void ImGuiDrawer::OnTouchEvent(TouchEvent& e) {
   }
 }
 
+void ImGuiDrawer::OnLostFocus(UISetupEvent&) { ClearInput(); }
+
 void ImGuiDrawer::ClearInput() {
   auto& io = GetIO();
   if (touch_pointer_id_ == TouchEvent::kPointerIDNone && ImGui::IsAnyMouseDown()) {
@@ -638,6 +642,7 @@ void ImGuiDrawer::DetachIfLastDialogRemoved() {
     presenter_->RemoveUIDrawerFromUIThread(this);
   }
   window_->RemoveInputListener(this);
+  window_->RemoveListener(this);
   // Clear all input since no input will be received anymore, and when the
   // drawer becomes active again, it'd have an outdated input state otherwise
   // which will be persistent until new events actualize individual input
