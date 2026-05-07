@@ -21,6 +21,7 @@ set(REXGRAPHICS_SYSTEM_SOURCES
     trace_writer.cpp
     pipeline/texture/extent.cpp
     pipeline/texture/util.cpp
+    pipeline/texture/replacement.cpp
     util/draw_extent_estimator.cpp
     util/draw.cpp
     packet_disassembler.cpp
@@ -121,6 +122,9 @@ target_link_libraries(rexgraphics PUBLIC
     rexui
     xxHash::xxhash
     snappy
+)
+target_link_libraries(rexgraphics PRIVATE
+    stb_image
 )
 
 if(REXGLUE_USE_VULKAN)

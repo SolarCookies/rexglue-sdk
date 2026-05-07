@@ -17,7 +17,7 @@ set(REXGLUE_INSTALL_TARGETS
     rexcore rexfilesystem rexui rexinput
     rexaudio rexgraphics rexsystem rexkernel rexcodegen
     # Vendored thirdparty libraries (required by SDK)
-    disruptorplus renderdoc simde tomlplusplus  # INTERFACE (header-only)
+    disruptorplus renderdoc simde tomlplusplus stb_image  # INTERFACE (header-only)
     aes128 mspack o1heap disasm xxhash imgui  # STATIC libraries
     libavcodec libavutil           # FFmpeg (vendored build)
     # CLI tool
