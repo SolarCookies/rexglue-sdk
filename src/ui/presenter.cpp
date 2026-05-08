@@ -736,7 +736,7 @@ void Presenter::AddUIDrawerFromUIThread(UIDrawer* drawer, size_t z_order) {
     drawer_last_draw = it_existing->second.last_draw;
     // If removing the drawer that is the next in the current drawer loop, skip
     // it (in a multimap, only one element iterator is invalidated).
-    if (is_executing_ui_drawers_ && ui_draw_next_iterator_ == it_existing) {
+    if (ui_draw_next_iterator_ == it_existing) {
       ++ui_draw_next_iterator_;
     }
     ui_drawers_.erase(it_existing);
@@ -761,7 +761,7 @@ void Presenter::RemoveUIDrawerFromUIThread(UIDrawer* drawer) {
     }
     // If removing the drawer that is the next in the current drawer loop, skip
     // it (in a multimap, only one element iterator is invalidated).
-    if (is_executing_ui_drawers_ && ui_draw_next_iterator_ == it_existing) {
+    if (ui_draw_next_iterator_ == it_existing) {
       ++ui_draw_next_iterator_;
     }
     ui_drawers_.erase(it_existing);
