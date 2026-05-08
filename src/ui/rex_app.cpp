@@ -197,10 +197,28 @@ bool ReXApp::ConstructRuntime(const PathConfig& paths) {
     auto* input_sys = static_cast<rex::input::InputSystem*>(runtime_->input_system());
     if (input_sys) {
       input_sys->SetActiveCallback([this]() {
-        if (!debug_overlay_ && !console_overlay_ && !settings_overlay_)
-          return true;
-        return !ImGui::GetIO().WantCaptureMouse;
+        if (console_overlay_ || settings_overlay_ || shader_debugger_overlay_)
+          return false;
+        if (debug_overlay_)
+          return !ImGui::GetIO().WantCaptureMouse;
+        return true;
       });
+    }
+  }
+
+  // Apply persistent shader blacklist from shaders.toml so disabled shaders
+  // are skipped from the very first draw, without requiring the user to open
+  // the shader debugger overlay first.
+  {
+    auto* gs = static_cast<rex::graphics::GraphicsSystem*>(runtime_->graphics_system());
+    if (gs) {
+      if (auto* cp = gs->command_processor()) {
+        auto blacklist = ui::ShaderDebuggerDialog::ReadShaderBlacklistFromToml(
+            std::filesystem::path("shaders.toml"));
+        for (uint64_t hash : blacklist) {
+          cp->AddShaderBlacklist(hash);
+        }
+      }
     }
   }
 
@@ -266,25 +284,8 @@ bool ReXApp::SetupPresentation() {
   }
   window_->Open();
 
-// Always expose the window to the runtime so hooks (native rendering, etc.)
-// can obtain the native handle even when the SDK graphics system is disabled.
-runtime_->set_display_window(window_.get());
-
-// Setup graphics presenter and ImGui
-auto* graphics_system = static_cast<rex::graphics::GraphicsSystem*>(runtime_->graphics_system());
-
-// Apply persistent shader blacklist from shaders.toml so disabled shaders
-// are skipped from the very first draw, without requiring the user to open
-// the F2 shader debugger overlay first.
-if (graphics_system) {
-  if (auto* cp = graphics_system->command_processor()) {
-    auto blacklist = ui::ShaderDebuggerDialog::ReadShaderBlacklistFromToml(
-        std::filesystem::path("shaders.toml"));
-    for (uint64_t hash : blacklist) {
-      cp->AddShaderBlacklist(hash);
-    }
-  }
-}
+  // Setup graphics presenter and ImGui
+  auto* graphics_system = static_cast<rex::graphics::GraphicsSystem*>(config_.graphics.get());
 
   if (graphics_system && graphics_system->presenter()) {
     auto* presenter = graphics_system->presenter();
@@ -427,21 +428,6 @@ if (graphics_system) {
         });
 
         OnCreateDialogs(imgui_drawer_.get());
-
-        runtime_->set_imgui_drawer(imgui_drawer_.get());
-
-        // Tell input drivers to suppress input while interactive host overlays
-        // are open. This also lets MnK release capture and reveal the cursor.
-        auto* input_sys = static_cast<rex::input::InputSystem*>(runtime_->input_system());
-        if (input_sys) {
-          input_sys->SetActiveCallback([this]() {
-            if (console_overlay_ || settings_overlay_ || shader_debugger_overlay_)
-              return false;
-            if (debug_overlay_)
-              return !ImGui::GetIO().WantCaptureMouse;
-            return true;
-          });
-        }
       }
     }
     window_->SetPresenter(presenter);
