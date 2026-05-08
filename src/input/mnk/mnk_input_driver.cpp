@@ -325,11 +325,11 @@ TickRepeats();
   return X_ERROR_SUCCESS;
 }
 
-void MnkInputDriver::EnqueueKeystroke(uint16_t vk_pad, bool down) {
+void MnkInputDriver::EnqueueKeystroke(uint16_t vk_pad, uint16_t flags) {
   X_INPUT_KEYSTROKE ks = {};
   ks.virtual_key = vk_pad;
   ks.unicode = 0;
-  ks.flags = down ? X_INPUT_KEYSTROKE_KEYDOWN : X_INPUT_KEYSTROKE_KEYUP;
+  ks.flags = flags;
   ks.user_index = static_cast<uint8_t>(UserIndex());
   ks.hid_code = 0;
   keystroke_queue_.push(ks);
@@ -501,7 +501,7 @@ void MnkInputDriver::TickRepeats() {
   }
 }
 
-void MnkInputDriver::CenterCursor()
+void MnkInputDriver::CenterCursor() {
   if (!attached_window_)
     return;
   int32_t cx = static_cast<int32_t>(attached_window_->GetActualLogicalWidth() / 2);
@@ -594,15 +594,16 @@ void MnkInputDriver::OnMouseDown(rex::ui::MouseEvent& e) {
   if (!IsEnabled() || !has_focus_ || !is_active())
     return;
   std::lock_guard lock(state_mutex_);
+  VirtualKey vk = VirtualKey::kNone;
   switch (e.button()) {
     case rex::ui::MouseEvent::Button::kLeft:
-      SetKeyState(static_cast<uint16_t>(VirtualKey::kLButton), true);
+      vk = VirtualKey::kLButton;
       break;
     case rex::ui::MouseEvent::Button::kRight:
-      SetKeyState(static_cast<uint16_t>(VirtualKey::kRButton), true);
+      vk = VirtualKey::kRButton;
       break;
     case rex::ui::MouseEvent::Button::kMiddle:
-      SetKeyState(static_cast<uint16_t>(VirtualKey::kMButton), true);
+      vk = VirtualKey::kMButton;
       break;
     case rex::ui::MouseEvent::Button::kX1:
       vk = VirtualKey::kXButton1;
@@ -611,7 +612,14 @@ void MnkInputDriver::OnMouseDown(rex::ui::MouseEvent& e) {
       vk = VirtualKey::kXButton2;
       break;
     default:
-      break;
+      return;
+  }
+  uint16_t idx = static_cast<uint16_t>(vk);
+  bool was_down = (idx < 256) && key_down_[idx];
+  SetKeyState(idx, true);
+  if (!was_down) {
+    EmitButtonChange(vk, true);
+    RecomputeLstickDir();
   }
 }
 
@@ -620,15 +628,16 @@ void MnkInputDriver::OnMouseUp(rex::ui::MouseEvent& e) {
     return;
   bool can_emit = has_focus_ && is_active();
   std::lock_guard lock(state_mutex_);
+  VirtualKey vk = VirtualKey::kNone;
   switch (e.button()) {
     case rex::ui::MouseEvent::Button::kLeft:
-      SetKeyState(static_cast<uint16_t>(VirtualKey::kLButton), false);
+      vk = VirtualKey::kLButton;
       break;
     case rex::ui::MouseEvent::Button::kRight:
-      SetKeyState(static_cast<uint16_t>(VirtualKey::kRButton), false);
+      vk = VirtualKey::kRButton;
       break;
     case rex::ui::MouseEvent::Button::kMiddle:
-      SetKeyState(static_cast<uint16_t>(VirtualKey::kMButton), false);
+      vk = VirtualKey::kMButton;
       break;
     case rex::ui::MouseEvent::Button::kX1:
       vk = VirtualKey::kXButton1;
