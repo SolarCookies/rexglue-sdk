@@ -83,7 +83,9 @@ if(REXGLUE_ENABLE_PERF_COUNTERS)
 endif()
 
 if(WIN32)
-    target_link_libraries(rexruntime PRIVATE ws2_32)
+  target_link_libraries(rexruntime PRIVATE rexdiscord ws2_32)
+elseif(LINUX)
+  target_link_libraries(rexruntime PRIVATE rexdiscord)
 endif()
 
 if(REXGLUE_USE_D3D12)
