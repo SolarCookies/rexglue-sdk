@@ -12,24 +12,24 @@
 #include <string>
 #include <thread>
 #if REX_PLATFORM_LINUX
-#  include <vector>
+#include <vector>
 #endif
 
 REXCVAR_DEFINE_BOOL(discord_activity, true, "Thirdparty", "Enable Discord Rich Presence activity");
 
 #if REX_PLATFORM_WIN32
-#  ifndef NOMINMAX
-#    define NOMINMAX
-#  endif
-#  ifndef WIN32_LEAN_AND_MEAN
-#    define WIN32_LEAN_AND_MEAN
-#  endif
-#  include <Windows.h>
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <Windows.h>
 #elif REX_PLATFORM_LINUX
-#  include <sys/select.h>
-#  include <sys/socket.h>
-#  include <sys/un.h>
-#  include <unistd.h>
+#include <sys/select.h>
+#include <sys/socket.h>
+#include <sys/un.h>
+#include <unistd.h>
 #endif
 
 namespace rex::discord_rpc {
@@ -54,10 +54,14 @@ std::atomic<bool> g_dirty{false};
 
 #if REX_PLATFORM_WIN32
 HANDLE g_pipe = INVALID_HANDLE_VALUE;
-bool IsConnected() { return g_pipe != INVALID_HANDLE_VALUE; }
+bool IsConnected() {
+  return g_pipe != INVALID_HANDLE_VALUE;
+}
 #elif REX_PLATFORM_LINUX
 int g_sock = -1;
-bool IsConnected() { return g_sock != -1; }
+bool IsConnected() {
+  return g_sock != -1;
+}
 #endif
 
 #if REX_PLATFORM_WIN32
@@ -66,8 +70,8 @@ bool ConnectToDiscord() {
   for (int i = 0; i < 10; ++i) {
     char name[64];
     std::snprintf(name, sizeof(name), "\\\\.\\pipe\\discord-ipc-%d", i);
-    HANDLE h = ::CreateFileA(name, GENERIC_READ | GENERIC_WRITE, 0, nullptr,
-                             OPEN_EXISTING, 0, nullptr);
+    HANDLE h =
+        ::CreateFileA(name, GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, 0, nullptr);
     if (h != INVALID_HANDLE_VALUE) {
       g_pipe = h;
       return true;
@@ -136,12 +140,11 @@ bool WriteFrame(uint32_t op, const std::string& payload) {
     return false;
   uint32_t header[2] = {op, static_cast<uint32_t>(payload.size())};
   DWORD written = 0;
-  if (!::WriteFile(g_pipe, header, sizeof(header), &written, nullptr) ||
-      written != sizeof(header))
+  if (!::WriteFile(g_pipe, header, sizeof(header), &written, nullptr) || written != sizeof(header))
     return false;
   if (!payload.empty()) {
-    if (!::WriteFile(g_pipe, payload.data(), static_cast<DWORD>(payload.size()),
-                     &written, nullptr) ||
+    if (!::WriteFile(g_pipe, payload.data(), static_cast<DWORD>(payload.size()), &written,
+                     nullptr) ||
         written != payload.size())
       return false;
   }
@@ -189,8 +192,7 @@ void DrainMessages(bool* out_ready = nullptr) {
       return;
     uint32_t header[2] = {0, 0};
     DWORD read = 0;
-    if (!::ReadFile(g_pipe, header, sizeof(header), &read, nullptr) ||
-        read != sizeof(header))
+    if (!::ReadFile(g_pipe, header, sizeof(header), &read, nullptr) || read != sizeof(header))
       return;
     std::string buf;
     if (header[1] > 0) {
@@ -198,8 +200,7 @@ void DrainMessages(bool* out_ready = nullptr) {
       DWORD total = 0;
       while (total < header[1]) {
         DWORD n = 0;
-        if (!::ReadFile(g_pipe, buf.data() + total, header[1] - total, &n, nullptr) ||
-            n == 0)
+        if (!::ReadFile(g_pipe, buf.data() + total, header[1] - total, &n, nullptr) || n == 0)
           return;
         total += n;
       }
@@ -274,10 +275,16 @@ void DrainMessages(bool* out_ready = nullptr) {
 #endif  // DrainMessages
 
 #if REX_PLATFORM_WIN32
-uint32_t GetPid() { return static_cast<uint32_t>(::GetCurrentProcessId()); }
-std::string GetNonce() { return std::to_string(::GetTickCount()); }
+uint32_t GetPid() {
+  return static_cast<uint32_t>(::GetCurrentProcessId());
+}
+std::string GetNonce() {
+  return std::to_string(::GetTickCount());
+}
 #elif REX_PLATFORM_LINUX
-uint32_t GetPid() { return static_cast<uint32_t>(::getpid()); }
+uint32_t GetPid() {
+  return static_cast<uint32_t>(::getpid());
+}
 std::string GetNonce() {
   return std::to_string(std::chrono::duration_cast<std::chrono::milliseconds>(
                             std::chrono::steady_clock::now().time_since_epoch())
@@ -290,13 +297,27 @@ std::string JsonEscape(const std::string& in) {
   out.reserve(in.size() + 2);
   for (char c : in) {
     switch (c) {
-      case '"':  out += "\\\""; break;
-      case '\\': out += "\\\\"; break;
-      case '\b': out += "\\b";  break;
-      case '\f': out += "\\f";  break;
-      case '\n': out += "\\n";  break;
-      case '\r': out += "\\r";  break;
-      case '\t': out += "\\t";  break;
+      case '"':
+        out += "\\\"";
+        break;
+      case '\\':
+        out += "\\\\";
+        break;
+      case '\b':
+        out += "\\b";
+        break;
+      case '\f':
+        out += "\\f";
+        break;
+      case '\n':
+        out += "\\n";
+        break;
+      case '\r':
+        out += "\\r";
+        break;
+      case '\t':
+        out += "\\t";
+        break;
       default:
         if (static_cast<unsigned char>(c) < 0x20) {
           char hex[8];
@@ -325,8 +346,7 @@ bool SendClearActivity() {
 }
 
 bool SendActivity(const Presence& p, int64_t start_timestamp) {
-  auto appendStr = [](std::string& dst, bool& first, const char* key,
-                      const std::string& val) {
+  auto appendStr = [](std::string& dst, bool& first, const char* key, const std::string& val) {
     if (val.empty())
       return;
     if (!first)

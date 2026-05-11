@@ -24,10 +24,10 @@
 namespace rex::discord_rpc {
 
 struct Presence {
-  std::string details_;          // first line under the title, e.g. "In Main Menu"
-  std::string state_;            // second line, e.g. "Level 196"
-  std::string large_image_key_;  // asset name from the Developer Portal
-  std::string large_image_text_; // tooltip shown on hover
+  std::string details_;           // first line under the title, e.g. "In Main Menu"
+  std::string state_;             // second line, e.g. "Level 196"
+  std::string large_image_key_;   // asset name from the Developer Portal
+  std::string large_image_text_;  // tooltip shown on hover
   std::string small_image_key_;
   std::string small_image_text_;
 };
